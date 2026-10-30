@@ -45,6 +45,20 @@ export async function authenticateWithAirtable(email: string, password: string):
   const cleanEmail = email.trim().toLowerCase();
   const inputPassword = password.trim();
 
+  // Local credentials are available only while running the development server.
+  if (process.env.NODE_ENV === 'development') {
+    const localEmail = process.env.LOCAL_AUTH_EMAIL?.trim().toLowerCase();
+    const localPassword = process.env.LOCAL_AUTH_PASSWORD;
+    if (localEmail && localPassword && cleanEmail === localEmail) {
+      const expected = Buffer.from(localPassword);
+      const received = Buffer.from(inputPassword);
+      if (expected.length === received.length && crypto.timingSafeEqual(expected, received)) {
+        return { success: true, user: { id: 'local-dev', name: 'Momen', email: localEmail } };
+      }
+      return { success: false, error: 'كلمة المرور غير صحيحة' };
+    }
+  }
+
   try {
     const url = `${AIRTABLE_API_URL}/${BASE_ID}/${USERS_TABLE}`;
     const res = await airtableFetch(url, {
