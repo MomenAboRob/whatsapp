@@ -6,7 +6,7 @@ import { normalizeMessageContent } from '@whiskeysockets/baileys';
 import { getAuthUserFromRequest } from '@/lib/auth';
 
 const isConversationJid = (jid?: string) => !jid || (!jid.endsWith('@broadcast') && !jid.endsWith('@newsletter'));
-const isContactName = (value?: string): boolean => Boolean(value?.trim() && value !== 'null' && !/^[+\d\s().-]+$/.test(value.trim()));
+const isContactName = (value?: string): boolean => Boolean(value?.trim() && value !== 'null' && !/^[+\d\s().∙•*-]+$/.test(value.trim()));
 const unwrapMessageContent = <T>(content: T): T =>
   normalizeMessageContent(content as Parameters<typeof normalizeMessageContent>[0]) as T;
 
@@ -711,10 +711,13 @@ export class WhatsAppManager {
     const ownPhone = this.connectedUser?.phone || '';
     const ownLid = ownPhone ? this.phoneToLidMap[ownPhone] : '';
     if (ownPhone && (realPhone === ownPhone || rawId === ownPhone || (ownLid && lid === ownLid))) {
+      const savedOwnName = this.savedContactsMap?.[`${ownPhone}@s.whatsapp.net`];
+      const ownName = isContactName(savedOwnName) ? savedOwnName :
+        isContactName(this.connectedUser?.name) ? this.connectedUser!.name : 'أنا';
       return {
         realPhone: ownPhone,
         formattedPhone: formatPhoneNumber(ownPhone),
-        contactName: `${this.connectedUser?.name || 'أنا'} (رسائلي)`,
+        contactName: `${ownName} (رسائلي)`,
         cleanId: ownPhone,
         isGroup: false,
       };
@@ -730,7 +733,7 @@ export class WhatsAppManager {
     ].filter(Boolean);
 
     for (const k of candidateKeys) {
-      const val = this.savedContactsMap?.[k] || this.contactsMap[k];
+      const val = this.savedContactsMap?.[k] || (savedNameOnly ? '' : this.contactsMap[k]);
       if (typeof val === 'string' && isContactName(val) && val !== 'أنا') {
         foundName = val.trim();
         break;
@@ -1427,7 +1430,7 @@ export class WhatsAppManager {
         }
 
         if (this.connectedUser?.phone && resolved.realPhone === this.connectedUser.phone) {
-          g.name = `${this.connectedUser.name || 'أنا'} (رسائلي)`;
+          g.name = resolved.contactName;
         } else if (g.name === 'أنا' || !g.name || g.name.startsWith('+10') || (g.name.length >= 14 && /^\d+$/.test(g.name))) {
           g.name = (resolved.contactName && resolved.contactName !== 'أنا' && !resolved.contactName.startsWith('+10'))
             ? resolved.contactName
@@ -2059,8 +2062,9 @@ export class WhatsAppManager {
       }
 
       // استيراد ديناميكي لحزمة Baileys
-      const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = await import('@whiskeysockets/baileys');
+      const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers, fetchLatestWaWebVersion } = await import('@whiskeysockets/baileys');
       const pino = (await import('pino')).default;
+      const latestVersion = await fetchLatestWaWebVersion();
 
       const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
       this.appStateKeys = state.keys;
@@ -2069,7 +2073,8 @@ export class WhatsAppManager {
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        browser: Browsers.windows('Desktop'),
+        browser: Browsers.ubuntu('Chrome'),
+        version: latestVersion.version,
         syncFullHistory: true,
         emitOwnEvents: true,
         connectTimeoutMs: 60000,
@@ -2132,7 +2137,7 @@ export class WhatsAppManager {
           const isReplaced = statusCode === DisconnectReason.connectionReplaced || statusCode === 440;
           const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401;
 
-          console.log(`[WhatsApp] حالة الاتصال: إغلاق، الكود: ${statusCode || 'غير محدد'}`);
+          console.log(`[WhatsApp] حالة الاتصال: إغلاق، الكود: ${statusCode || 'غير محدد'}، السبب: ${lastDisconnect?.error?.message || 'غير محدد'}`);
 
           if (isLoggedOut) {
             // تسجيل خروج مقصود من جهاز الهاتف
