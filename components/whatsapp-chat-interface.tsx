@@ -1653,22 +1653,36 @@ export function WhatsAppChatInterface({
     return realGroups.find((g) => g.name === activeGroup || g.id === activeGroup) || null;
   }, [activeGroup, realGroups]);
 
-  // تثبيت / إلغاء تثبيت محادثة
-  const togglePinChat = (chat: any) => {
+  const isChatPinned = (chat: any): boolean => {
+    if (chat?.pinned !== undefined) return Boolean(chat.pinned);
+    return Boolean(chat && (pinnedChatKeys.has(chat.id || '') || pinnedChatKeys.has(chat.name)));
+  };
+
+  // تثبيت / إلغاء تثبيت محادثة في واتساب
+  const togglePinChat = async (chat: any) => {
     const key = chat.id || chat.name;
-    setPinnedChatKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(key) || next.has(chat.name)) {
+    const pin = !isChatPinned(chat);
+    setChatContextMenu(null);
+    try {
+      const response = await fetch('/api/whatsapp/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'pin_chat', id: key, pin }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error('pin failed');
+      if (Array.isArray(data.groups)) setRealGroups(data.groups);
+      setPinnedChatKeys((prev) => {
+        const next = new Set(prev);
         next.delete(key);
         next.delete(chat.name);
-        toast.info('تم إلغاء تثبيت المحادثة.');
-      } else {
-        next.add(key);
-        toast.success('تم تثبيت المحادثة في أعلى القائمة.');
-      }
-      return next;
-    });
-    setChatContextMenu(null);
+        return next;
+      });
+      if (pin) toast.success('تم تثبيت المحادثة في أعلى القائمة.');
+      else toast.info('تم إلغاء تثبيت المحادثة.');
+    } catch {
+      toast.warning('تعذر مزامنة التثبيت مع واتساب. تحقق من الاتصال.');
+    }
   };
 
   // فتح المحادثة في نافذة متصفح مستقلة (Pop-out Window)
@@ -7381,6 +7395,7 @@ export function WhatsAppChatInterface({
       phone?: string;
       latestMsg?: any;
       archived?: boolean;
+      pinned?: number | null;
     }[] = [];
     const seenNames = new Set<string>();
     const seenJids = new Set<string>();
@@ -7520,6 +7535,7 @@ export function WhatsAppChatInterface({
         phone: rg.phone,
         latestMsg,
         archived: typeof rg.archived === 'boolean' ? rg.archived : undefined,
+        pinned: rg.pinned,
       });
     }
 
@@ -7609,6 +7625,7 @@ export function WhatsAppChatInterface({
         avatarUrl: matchedGroup?.avatarUrl,
         phone: matchedGroup?.phone,
         archived: typeof matchedGroup?.archived === 'boolean' ? matchedGroup.archived : undefined,
+        pinned: matchedGroup?.pinned,
       });
     }
 
@@ -7618,8 +7635,8 @@ export function WhatsAppChatInterface({
     return list.sort((a, b) => {
       const aKey = a.id || a.name;
       const bKey = b.id || b.name;
-      const aPinned = pinnedChatKeys.has(aKey) || pinnedChatKeys.has(a.name);
-      const bPinned = pinnedChatKeys.has(bKey) || pinnedChatKeys.has(b.name);
+      const aPinned = a.pinned !== undefined ? Boolean(a.pinned) : pinnedChatKeys.has(aKey) || pinnedChatKeys.has(a.name);
+      const bPinned = b.pinned !== undefined ? Boolean(b.pinned) : pinnedChatKeys.has(bKey) || pinnedChatKeys.has(b.name);
       if (aPinned && !bPinned) return -1;
       if (!aPinned && bPinned) return 1;
 
@@ -8668,7 +8685,7 @@ export function WhatsAppChatInterface({
                         </span>
                         <div className="flex items-center gap-1.5 shrink-0">
                           <span className="text-[11px] text-[#a5a5a5]">{g.time}</span>
-                          {pinnedChatKeys.has(g.id || g.name) && (
+                          {isChatPinned(g) && (
                             <Pin className="w-3.5 h-3.5 text-[#8696a0] rotate-45 shrink-0" />
                           )}
                           {Boolean(mutedChats[g.id || g.name]) && (
@@ -11033,7 +11050,7 @@ export function WhatsAppChatInterface({
             chatInfo={chatInfoData}
             isLoading={isLoadingChatInfo}
             activeGroup={activeGroup}
-            isPinned={Boolean(pinnedChatKeys.has(activeChatCrmKey) || pinnedChatKeys.has(activeGroup))}
+            isPinned={isChatPinned(activeChatInfo || { id: activeChatCrmKey, name: activeGroup })}
             isMuted={Boolean(mutedChats[activeChatCrmKey] || mutedChats[activeGroup])}
             isFavorite={Boolean(favoriteChatKeys.has(activeChatCrmKey) || favoriteChatKeys.has(activeGroup))}
             onTogglePin={() => {
@@ -13314,11 +13331,7 @@ export function WhatsAppChatInterface({
         x={chatContextMenu?.x || 0}
         y={chatContextMenu?.y || 0}
         chat={chatContextMenu?.chat}
-        isPinned={Boolean(
-          chatContextMenu?.chat &&
-            (pinnedChatKeys.has(chatContextMenu.chat.id || '') ||
-              pinnedChatKeys.has(chatContextMenu.chat.name))
-        )}
+        isPinned={isChatPinned(chatContextMenu?.chat)}
         isArchived={Boolean(
           chatContextMenu?.chat &&
             (typeof chatContextMenu.chat.archived === 'boolean'

@@ -6,6 +6,7 @@ import { normalizeMessageContent } from '@whiskeysockets/baileys';
 import { getAuthUserFromRequest } from '@/lib/auth';
 
 const isConversationJid = (jid?: string) => !jid || (!jid.endsWith('@broadcast') && !jid.endsWith('@newsletter'));
+const isContactName = (value?: string): boolean => Boolean(value?.trim() && value !== 'null' && !/^[+\d\s().-]+$/.test(value.trim()));
 const unwrapMessageContent = <T>(content: T): T =>
   normalizeMessageContent(content as Parameters<typeof normalizeMessageContent>[0]) as T;
 
@@ -206,9 +207,7 @@ export function formatPhoneNumber(phone: string): string {
   if (clean.startsWith('968') && clean.length >= 10) {
     return `+968 ${clean.slice(3, 5)} ${clean.slice(5, 7)} ${clean.slice(7)}`;
   }
-  if (clean.length >= 10) {
-    return `+${clean.slice(0, 3)} ${clean.slice(3, 6)} ${clean.slice(6)}`;
-  }
+  // Country codes have different lengths; do not guess one for unknown numbers.
   return `+${clean}`;
 }
 
@@ -220,6 +219,7 @@ export interface WhatsAppGroupItem {
   avatarUrl?: string;
   phone?: string;
   archived?: boolean;
+  pinned?: number | null;
 }
 
 export interface WhatsAppPresence {
@@ -251,6 +251,7 @@ export class WhatsAppManager {
   private mediaDownloadsInFlight: Map<string, Promise<string | undefined>> = new Map();
   private emitGroupsDebounceTimer: NodeJS.Timeout | null = null;
   private contactsMap: Record<string, string> = {};
+  private savedContactsMap: Record<string, string> = {};
   private lidToPhoneMap: Record<string, string> = {};
   private phoneToLidMap: Record<string, string> = {};
   private avatarsMap: Record<string, string> = {};
@@ -263,6 +264,10 @@ export class WhatsAppManager {
   private appStateKeys: any = null;
   private lastArchiveSnapshotTime: number = 0;
   private archiveSnapshotRevision: number = 0;
+  private lastContactSnapshotTime: number = 0;
+  private contactRefreshTimer: NodeJS.Timeout | null = null;
+  public lastContactSyncStatus: string = 'pending';
+  public lastContactSyncError: string | null = null;
   public lastArchiveSyncError: string | null = null;
   public lastArchiveSyncStatus: string = 'pending';
   private lockFilePath: string;
@@ -459,6 +464,17 @@ export class WhatsAppManager {
       }
     }
 
+    // Next.js hot reload keeps manager instances alive across class changes.
+    if (!inst.savedContactsMap) {
+      try {
+        const savedPath = path.join(inst.authDir, 'stored_saved_contacts.json');
+        inst.savedContactsMap = fs.existsSync(savedPath) ? JSON.parse(fs.readFileSync(savedPath, 'utf-8')) : {};
+      } catch {
+        inst.savedContactsMap = {};
+      }
+      inst.lastContactSnapshotTime = 0;
+    }
+
     return inst;
   }
 
@@ -566,6 +582,16 @@ export class WhatsAppManager {
   public loadLidMappings(): void {
     try {
       if (!fs.existsSync(this.authDir)) return;
+      const savedMapPath = path.join(this.authDir, 'stored_lid_phone_map.json');
+      if (fs.existsSync(savedMapPath)) {
+        const savedMap = JSON.parse(fs.readFileSync(savedMapPath, 'utf-8'));
+        for (const [lid, phone] of Object.entries(savedMap || {})) {
+          if (/^\d{8,20}$/.test(lid) && typeof phone === 'string' && /^\d{8,15}$/.test(phone)) {
+            this.lidToPhoneMap[lid] = phone;
+            this.phoneToLidMap[phone] = lid;
+          }
+        }
+      }
       const files = fs.readdirSync(this.authDir);
       for (const file of files) {
         if (file.startsWith('lid-mapping-') && file.endsWith('_reverse.json')) {
@@ -598,6 +624,41 @@ export class WhatsAppManager {
     }
   }
 
+  private rememberContact(contact: any): void {
+    if (!contact?.id || typeof contact.id !== 'string') return;
+    this.savedContactsMap ||= {};
+    const lidJid = contact.lid || (contact.id.endsWith('@lid') ? contact.id : '');
+    const phoneJid = contact.phoneNumber || (contact.id.endsWith('@s.whatsapp.net') ? contact.id : '');
+    const lid = lidJid?.endsWith('@lid') ? lidJid.split('@')[0] : '';
+    const phone = phoneJid?.endsWith('@s.whatsapp.net') ? phoneJid.split('@')[0] : '';
+    if (lid && /^\d{8,15}$/.test(phone)) {
+      this.lidToPhoneMap[lid] = phone;
+      this.phoneToLidMap[phone] = lid;
+    }
+
+    // A saved contact name takes precedence over the person's WhatsApp push name.
+    const savedName = isContactName(contact.name) ? contact.name.trim() : '';
+    const pushName = isContactName(contact.notify) ? contact.notify.trim() : '';
+    for (const key of new Set([contact.id, lidJid, phoneJid, phone].filter(Boolean))) {
+      if (savedName) {
+        this.savedContactsMap[key] = savedName;
+        this.contactsMap[key] = savedName;
+      }
+      else if (pushName && !isContactName(this.contactsMap[key])) this.contactsMap[key] = pushName;
+    }
+  }
+
+  private scheduleContactsRefresh(): void {
+    if (this.contactRefreshTimer) clearTimeout(this.contactRefreshTimer);
+    this.contactRefreshTimer = setTimeout(() => {
+      this.contactRefreshTimer = null;
+      this.sanitizeUserGroupsAndMessages();
+      this.persistContacts();
+      this.persistData();
+      this.emitGroupsThrottled();
+    }, 500);
+  }
+
   public decodeMentions(text: string): string {
     if (!text || typeof text !== 'string') return text;
     return text.replace(/@(\d{6,})/g, (match, id) => {
@@ -612,7 +673,7 @@ export class WhatsAppManager {
     });
   }
 
-  public resolveRealContact(jidOrId: string, pushName?: string): {
+  public resolveRealContact(jidOrId: string, pushName?: string, savedNameOnly = false): {
     realPhone?: string;
     formattedPhone?: string;
     contactName: string;
@@ -633,7 +694,7 @@ export class WhatsAppManager {
     }
 
     const rawId = jidOrId.split('@')[0].replace(/\D/g, '');
-    const isLid = jidOrId.endsWith('@lid') || Boolean(this.lidToPhoneMap[rawId]) || (rawId.length >= 14 && rawId.startsWith('10'));
+    const isLid = jidOrId.endsWith('@lid') || Boolean(this.lidToPhoneMap[rawId]);
 
     let realPhone = '';
     let lid = '';
@@ -669,21 +730,21 @@ export class WhatsAppManager {
     ].filter(Boolean);
 
     for (const k of candidateKeys) {
-      const val = this.contactsMap[k];
-      if (val && typeof val === 'string' && val.trim() && val !== 'null' && val !== 'أنا' && !val.startsWith('+10')) {
+      const val = this.savedContactsMap?.[k] || this.contactsMap[k];
+      if (typeof val === 'string' && isContactName(val) && val !== 'أنا') {
         foundName = val.trim();
         break;
       }
     }
 
-    if (!foundName && this.userGroups) {
+    if (!foundName && !savedNameOnly && this.userGroups) {
       const foundGroup = this.userGroups.find(
         (g) =>
           g.id === jidOrId ||
           (lid && g.id === `${lid}@lid`) ||
           (realPhone && (g.id === `${realPhone}@s.whatsapp.net` || (g.phone && g.phone.replace(/\D/g, '') === realPhone)))
       );
-      if (foundGroup?.name && !foundGroup.name.startsWith('+10') && foundGroup.name !== 'أنا') {
+      if (foundGroup && isContactName(foundGroup.name) && foundGroup.name !== 'أنا') {
         foundName = foundGroup.name.trim();
         if (realPhone) this.contactsMap[`${realPhone}@s.whatsapp.net`] = foundName;
         if (jidOrId) this.contactsMap[jidOrId] = foundName;
@@ -695,14 +756,14 @@ export class WhatsAppManager {
       return name.startsWith('حوالات') || name.startsWith('حولات') || name.startsWith('وصول') || name.startsWith('واصلات') || name.includes('||');
     };
 
-    if (!foundName && pushName && pushName.trim() && pushName !== 'null' && pushName !== 'أنا' && !pushName.startsWith('+10') && !isGroupName(pushName)) {
+    if (!foundName && !savedNameOnly && pushName && isContactName(pushName) && pushName !== 'أنا' && !isGroupName(pushName)) {
       foundName = pushName.trim();
       if (realPhone) this.contactsMap[`${realPhone}@s.whatsapp.net`] = foundName;
       if (jidOrId) this.contactsMap[jidOrId] = foundName;
     }
 
-    const formattedPhone = realPhone ? formatPhoneNumber(realPhone) : (lid ? `+${lid}` : '');
-    const contactName = (foundName && !foundName.startsWith('+10') && foundName !== 'أنا') ? foundName : (formattedPhone || `+${rawId}`);
+    const formattedPhone = realPhone ? formatPhoneNumber(realPhone) : '';
+    const contactName = isContactName(foundName) && foundName !== 'أنا' ? foundName : (formattedPhone || (isLid ? 'رقم غير متاح' : `+${rawId}`));
     const cleanId = realPhone || rawId;
 
     return {
@@ -1360,7 +1421,7 @@ export class WhatsAppManager {
       g.isGroup = isGroup;
 
       if (!isGroup) {
-        const resolved = this.resolveRealContact(g.id);
+        const resolved = this.resolveRealContact(g.id, undefined, true);
         if (resolved.realPhone) {
           g.phone = resolved.formattedPhone;
         }
@@ -1403,11 +1464,8 @@ export class WhatsAppManager {
       if (!isGroup) {
         // محادثة فردية خاصة
         // أولاً: نبحث في userGroups إن كان هناك اسم معتمد ومسجل مسبقاً لهذه المحادثة
-        const grp = this.userGroups.find((g) => g.id === m.chatJid || (g.phone && m.chatJid && m.chatJid.includes(g.phone.replace(/\D/g, ''))));
-        const knownName = grp?.name && !grp.name.startsWith('+10') && grp.name !== 'أنا' ? grp.name : undefined;
-
-        const resolved = this.resolveRealContact(m.chatJid || '', m.rawBaileysMessage?.pushName);
-        const bestName = knownName || (resolved.contactName && !resolved.contactName.startsWith('+10') && resolved.contactName !== 'أنا' ? resolved.contactName : undefined);
+        const resolved = this.resolveRealContact(m.chatJid || '', undefined, true);
+        const bestName = isContactName(resolved.contactName) && resolved.contactName !== 'أنا' ? resolved.contactName : undefined;
 
         if (bestName) {
           m.chatName = bestName;
@@ -1536,13 +1594,20 @@ export class WhatsAppManager {
     }
 
     // إزالة التكرارات إن وجدت
-    const seen = new Set<string>();
+    const seen = new Map<string, WhatsAppGroupItem>();
     const unique: WhatsAppGroupItem[] = [];
     for (const g of this.userGroups) {
       const key = g.isGroup ? g.id : (g.phone?.replace(/\D/g, '') || this.getCanonicalChatJid(g.id));
-      if (!seen.has(key)) {
-        seen.add(key);
+      const previous = seen.get(key);
+      if (!previous) {
+        seen.set(key, g);
         unique.push(g);
+      } else {
+        if (isContactName(g.name) && !isContactName(previous.name)) previous.name = g.name;
+        previous.phone ||= g.phone;
+        previous.avatarUrl ||= g.avatarUrl;
+        previous.unreadCount = Math.max(previous.unreadCount || 0, g.unreadCount || 0);
+        if (g.pinned && !previous.pinned) previous.pinned = g.pinned;
       }
     }
     this.userGroups = unique;
@@ -1669,12 +1734,14 @@ export class WhatsAppManager {
         }
         if (this.avatarsMap[cleanKey]) {
           const localRel = this.avatarsMap[cleanKey];
-          const localAbs = path.join(process.cwd(), 'public', localRel.replace(/^\//, ''));
-          if (fs.existsSync(localAbs)) {
+          const localAbs = path.join(this.avatarsDir, path.basename(localRel));
+          const legacyAbs = path.join(process.cwd(), 'public', localRel.replace(/^\//, ''));
+          if (fs.existsSync(localAbs) || fs.existsSync(legacyAbs)) {
             g.avatarUrl = localRel;
           }
         }
       }
+      this.emitGroupsThrottled();
 
       // 2. حساب وزن النشاط لكل محادثة لإعطاء الأولوية القصوى للمحادثات الحية التي بها رسائل في صندوق الوارد
       const activeChatWeights = new Map<string, number>();
@@ -1705,8 +1772,9 @@ export class WhatsAppManager {
         if (downloaded >= 60) break; // سقف لكل دورة مع بدء المحادثات النشطة أولاً لمنع 428
 
         if (g.avatarUrl) {
-          const localAbs = path.join(process.cwd(), 'public', g.avatarUrl.replace(/^\//, ''));
-          if (fs.existsSync(localAbs)) continue;
+          const localAbs = path.join(this.avatarsDir, path.basename(g.avatarUrl));
+          const legacyAbs = path.join(process.cwd(), 'public', g.avatarUrl.replace(/^\//, ''));
+          if (fs.existsSync(localAbs) || fs.existsSync(legacyAbs)) continue;
         }
 
         const isGrp = g.isGroup ?? (g.id ? g.id.endsWith('@g.us') : false);
@@ -1736,6 +1804,7 @@ export class WhatsAppManager {
             const original = this.userGroups.find((orig) => orig.id === g.id);
             if (original) original.avatarUrl = url;
             downloaded++;
+            this.emitGroupsThrottled();
           }
           await new Promise((r) => setTimeout(r, 150));
         } catch (e) {}
@@ -1743,6 +1812,7 @@ export class WhatsAppManager {
 
       console.log(`[WhatsApp] اكتمل جلب صور البروفايل: تم تنزيل ${downloaded} صورة جديدة.`);
       this.persistDataImmediate();
+      this.emitGroupsThrottled();
       // صور أعضاء القروبات الذين يرسلون رسائل (غير مشمولين في قائمة المحادثات)
       this.syncGroupSenderAvatars().catch(() => {});
       return { total: this.userGroups.length, downloaded };
@@ -1762,6 +1832,10 @@ export class WhatsAppManager {
       if (fs.existsSync(this.contactsFilePath)) {
         const raw = fs.readFileSync(this.contactsFilePath, 'utf-8');
         this.contactsMap = JSON.parse(raw) || {};
+      }
+      const savedContactsPath = path.join(this.authDir, 'stored_saved_contacts.json');
+      if (fs.existsSync(savedContactsPath)) {
+        this.savedContactsMap = JSON.parse(fs.readFileSync(savedContactsPath, 'utf-8')) || {};
       }
       this.loadLidMappings();
       if (fs.existsSync(this.messagesFilePath)) {
@@ -1824,8 +1898,10 @@ export class WhatsAppManager {
           this.userGroups = parsed.map((g: any) => {
             const cleanKey = (g.id || '').split('@')[0].replace(/\D/g, '');
             if (!g.avatarUrl && cleanKey && this.avatarsMap[cleanKey]) {
-              const localAbs = path.join(process.cwd(), 'public', this.avatarsMap[cleanKey].replace(/^\//, ''));
-              if (fs.existsSync(localAbs)) {
+              const localRel = this.avatarsMap[cleanKey];
+              const localAbs = path.join(this.avatarsDir, path.basename(localRel));
+              const legacyAbs = path.join(process.cwd(), 'public', localRel.replace(/^\//, ''));
+              if (fs.existsSync(localAbs) || fs.existsSync(legacyAbs)) {
                 g.avatarUrl = this.avatarsMap[cleanKey];
               }
             }
@@ -1844,6 +1920,8 @@ export class WhatsAppManager {
   public persistContacts() {
     try {
       fs.writeFileSync(this.contactsFilePath, JSON.stringify(this.contactsMap, null, 2), 'utf-8');
+      fs.writeFileSync(path.join(this.authDir, 'stored_saved_contacts.json'), JSON.stringify(this.savedContactsMap), 'utf-8');
+      fs.writeFileSync(path.join(this.authDir, 'stored_lid_phone_map.json'), JSON.stringify(this.lidToPhoneMap), 'utf-8');
     } catch (e) {
       console.error('خطأ في حفظ جهات الاتصال المخزنة:', e);
     }
@@ -1861,7 +1939,7 @@ export class WhatsAppManager {
           if (/^\d{8,15}$/.test(phone)) {
             const jid = `${phone}@s.whatsapp.net`;
             const lid = this.phoneToLidMap[phone];
-            const resolved = this.resolveRealContact(jid);
+            const resolved = this.resolveRealContact(jid, undefined, true);
             const knownName = resolved.contactName || this.contactsMap[jid] || this.contactsMap[phone];
             const existing = this.userGroups.find((g) => g.id === jid || (lid && g.id === `${lid}@lid`));
             if (knownName && !knownName.startsWith('+10')) {
@@ -1992,16 +2070,14 @@ export class WhatsAppManager {
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
         browser: Browsers.windows('Desktop'),
-        syncFullHistory: false,
+        syncFullHistory: true,
         emitOwnEvents: true,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
         keepAliveIntervalMs: 30000,
         markOnlineOnConnect: false,
         generateHighQualityLinkPreview: false,
-        shouldSyncHistoryMessage: (msg: any) => {
-          return msg?.syncType !== 3; // يسمح بمزامنة الرسائل والتفاعلات الحديثة RECENT و ON_DEMAND ويرفض FULL الضخم القديم
-        },
+        shouldSyncHistoryMessage: () => true,
         getMessage: async (key) => {
           const found = this.incomingMessages.find((m) => m.id === key.id || m.rawBaileysMessage?.key?.id === key.id);
           if (found?.rawBaileysMessage?.message) {
@@ -2099,32 +2175,22 @@ export class WhatsAppManager {
 
           this.events.emit('status', this.getStatus());
 
-          this.syncGroups().catch(() => {});
+          this.syncGroups(true).catch(() => {});
           this.syncStoredContacts();
           this.flushPendingMessages().catch(() => {});
           setTimeout(() => {
             this.syncAvatars().catch((err) => console.error('خطأ في مزامنة صور البروفايل:', err));
             this.flushPendingMessages().catch(() => {});
             this.syncMissingMedia().catch(() => {});
-            this.sock?.resyncAppState?.(['regular_low']).catch(() => {});
           }, 1500);
         }
       });
 
       // استقبال سجل المحادثات والرسائل الفعلية الكاملة من الهاتف عند المزامنة
-      this.sock.ev.on('messaging-history.set', async ({ chats, contacts, messages }: any) => {
+      this.sock.ev.on('messaging-history.set', async ({ chats, contacts, messages, syncType }: any) => {
         if (contacts && Array.isArray(contacts)) {
           for (const c of contacts) {
-            if (c?.id) {
-              const name = c.notify || c.name || c.verifiedName;
-              if (name && name !== 'null') {
-                this.contactsMap[c.id] = name;
-                if (c.id.includes('@')) {
-                  const cleanPhone = c.id.split('@')[0];
-                  this.contactsMap[`${cleanPhone}@s.whatsapp.net`] = name;
-                }
-              }
-            }
+            this.rememberContact(c);
           }
           this.persistContacts();
         }
@@ -2135,10 +2201,12 @@ export class WhatsAppManager {
               const isGroup = c.id.endsWith('@g.us');
               const hasArchiveState = c.archived !== undefined || c.archive !== undefined || c.isArchived !== undefined;
               const isArchived = Boolean(c.archived || c.archive || c.isArchived);
+              const hasPinState = c.pinned !== undefined;
+              const pinned = c.pinned ? Number(c.pinned) || 1 : null;
               let name = c.name || c.subject || this.contactsMap[c.id];
               let phone: string | undefined;
               if (!isGroup) {
-                const resolved = this.resolveRealContact(c.id);
+                const resolved = this.resolveRealContact(c.id, undefined, true);
                 name = (name && !name.startsWith('+10')) ? name : resolved.contactName;
                 phone = resolved.formattedPhone;
               } else {
@@ -2150,8 +2218,9 @@ export class WhatsAppManager {
                 existing.isGroup = isGroup;
                 if (phone) existing.phone = phone;
                 if (hasArchiveState) existing.archived = isArchived;
+                if (hasPinState) existing.pinned = pinned;
               } else {
-                this.userGroups.push({ id: c.id, name, unreadCount: c.unreadCount || 0, isGroup, phone, ...(hasArchiveState ? { archived: isArchived } : {}) });
+                this.userGroups.push({ id: c.id, name, unreadCount: c.unreadCount || 0, isGroup, phone, ...(hasArchiveState ? { archived: isArchived } : {}), ...(hasPinState ? { pinned } : {}) });
               }
             }
           }
@@ -2171,7 +2240,8 @@ export class WhatsAppManager {
           }
         }
 
-        if (messages && Array.isArray(messages)) {
+        // Full QR sync supplies contacts and chat metadata; keep old message history bounded.
+        if (syncType !== 2 && messages && Array.isArray(messages)) {
           for (const msg of messages) {
             await this.ingestBaileysMessage(msg);
           }
@@ -2188,12 +2258,14 @@ export class WhatsAppManager {
             const isGroup = c.id.endsWith('@g.us');
             const hasArchiveState = c.archived !== undefined || c.archive !== undefined || c.isArchived !== undefined;
             const isArchived = Boolean(c.archived || c.archive || c.isArchived);
+            const hasPinState = c.pinned !== undefined;
+            const pinned = c.pinned ? Number(c.pinned) || 1 : null;
             let name = c.name;
             let phone: string | undefined;
             if (isGroup) {
               name = name || 'مجموعة واتساب';
             } else {
-              const resolved = this.resolveRealContact(c.id);
+              const resolved = this.resolveRealContact(c.id, undefined, true);
               name = (name && !name.startsWith('+10')) ? name : resolved.contactName;
               phone = resolved.formattedPhone;
             }
@@ -2202,6 +2274,7 @@ export class WhatsAppManager {
               if (name && !name.startsWith('+10')) existing.name = name;
               if (phone) existing.phone = phone;
               if (hasArchiveState) existing.archived = isArchived;
+              if (hasPinState) existing.pinned = pinned;
             } else {
               this.userGroups.push({
                 id: c.id,
@@ -2210,6 +2283,7 @@ export class WhatsAppManager {
                 isGroup,
                 phone,
                 ...(hasArchiveState ? { archived: isArchived } : {}),
+                ...(hasPinState ? { pinned } : {}),
               });
             }
           }
@@ -2225,12 +2299,14 @@ export class WhatsAppManager {
             const isGroup = c.id.endsWith('@g.us');
             const hasArchiveState = c.archived !== undefined || c.archive !== undefined || c.isArchived !== undefined;
             const isArchived = Boolean(c.archived || c.archive || c.isArchived);
+            const hasPinState = c.pinned !== undefined;
+            const pinned = c.pinned ? Number(c.pinned) || 1 : null;
             let name = c.name;
             let phone: string | undefined;
             if (isGroup) {
               name = name || 'مجموعة واتساب';
             } else {
-              const resolved = this.resolveRealContact(c.id);
+              const resolved = this.resolveRealContact(c.id, undefined, true);
               name = (name && !name.startsWith('+10')) ? name : resolved.contactName;
               phone = resolved.formattedPhone;
             }
@@ -2239,6 +2315,7 @@ export class WhatsAppManager {
               if (name && !name.startsWith('+10')) existing.name = name;
               if (phone) existing.phone = phone;
               if (hasArchiveState) existing.archived = isArchived;
+              if (hasPinState) existing.pinned = pinned;
             } else {
               this.userGroups.push({
                 id: c.id,
@@ -2247,6 +2324,7 @@ export class WhatsAppManager {
                 isGroup,
                 phone,
                 ...(hasArchiveState ? { archived: isArchived } : {}),
+                ...(hasPinState ? { pinned } : {}),
               });
             }
           }
@@ -2259,72 +2337,27 @@ export class WhatsAppManager {
       this.sock.ev.on('contacts.set', ({ contacts }: any) => {
         if (contacts && Array.isArray(contacts)) {
           for (const c of contacts) {
-            if (c?.id) {
-              const name = c.notify || c.name || c.verifiedName;
-              if (name && name !== 'null') {
-                this.contactsMap[c.id] = name;
-                if (c.id.includes('@')) {
-                  const cleanPhone = c.id.split('@')[0];
-                  this.contactsMap[`${cleanPhone}@s.whatsapp.net`] = name;
-                }
-                const found = this.userGroups.find((g) => g.id === c.id);
-                if (found) {
-                  found.name = name;
-                } else if (!c.id.endsWith('@g.us')) {
-                  this.userGroups.push({ id: c.id, name, unreadCount: 0, isGroup: false });
-                }
-              }
-            }
+            this.rememberContact(c);
           }
-          this.persistContacts();
-          this.persistData();
+          this.scheduleContactsRefresh();
         }
       });
 
       this.sock.ev.on('contacts.upsert', (newContacts: any) => {
         if (Array.isArray(newContacts)) {
           for (const c of newContacts) {
-            if (c?.id) {
-              const name = c.notify || c.name || c.verifiedName;
-              if (name && name !== 'null') {
-                this.contactsMap[c.id] = name;
-                if (c.id.includes('@')) {
-                  const cleanPhone = c.id.split('@')[0];
-                  this.contactsMap[`${cleanPhone}@s.whatsapp.net`] = name;
-                }
-                const found = this.userGroups.find((g) => g.id === c.id);
-                if (found) {
-                  found.name = name;
-                } else if (!c.id.endsWith('@g.us')) {
-                  this.userGroups.push({ id: c.id, name, unreadCount: 0, isGroup: false });
-                }
-              }
-            }
+            this.rememberContact(c);
           }
-          this.persistContacts();
-          this.persistData();
+          this.scheduleContactsRefresh();
         }
       });
 
       this.sock.ev.on('contacts.update', (updates: any[]) => {
         if (Array.isArray(updates)) {
           for (const c of updates) {
-            if (c?.id) {
-              const name = c.notify || c.name || c.verifiedName;
-              if (name && name !== 'null' && !name.startsWith('+10')) {
-                this.contactsMap[c.id] = name;
-                if (c.id.includes('@')) {
-                  const cleanPhone = c.id.split('@')[0];
-                  this.contactsMap[`${cleanPhone}@s.whatsapp.net`] = name;
-                }
-                const found = this.userGroups.find((g) => g.id === c.id);
-                if (found) {
-                  found.name = name;
-                }
-              }
-            }
+            this.rememberContact(c);
           }
-          this.persistContacts();
+          this.scheduleContactsRefresh();
         }
       });
 
@@ -2366,6 +2399,8 @@ export class WhatsAppManager {
           }
           const grp = this.userGroups.find((g) => g.id === u.id);
           const isArchived = u.archived !== undefined ? Boolean(u.archived) : u.archive !== undefined ? Boolean(u.archive) : undefined;
+          const hasPinState = u.pinned !== undefined;
+          const pinned = u.pinned ? Number(u.pinned) || 1 : null;
           if (grp) {
             if (isArchived !== undefined && grp.archived !== isArchived) {
               grp.archived = isArchived;
@@ -2378,7 +2413,11 @@ export class WhatsAppManager {
                 hasChanges = true;
               }
             }
-          } else if (isArchived !== undefined) {
+            if (hasPinState && grp.pinned !== pinned) {
+              grp.pinned = pinned;
+              hasChanges = true;
+            }
+          } else if (isArchived !== undefined || hasPinState) {
             const isGroup = u.id.endsWith('@g.us');
             const resolved = !isGroup ? this.resolveRealContact(u.id) : null;
             this.userGroups.push({
@@ -2388,6 +2427,7 @@ export class WhatsAppManager {
               isGroup,
               phone: resolved?.formattedPhone,
               archived: isArchived,
+              ...(hasPinState ? { pinned } : {}),
             });
             hasChanges = true;
           }
@@ -2493,6 +2533,52 @@ export class WhatsAppManager {
     }
   }
 
+  private async syncSavedContacts(force: boolean): Promise<void> {
+    if (!force || !this.sock?.resyncAppState) return;
+    const keys = this.sock.authState?.keys;
+    if (!keys) return;
+    const collection = 'critical_unblock_low';
+    const now = Date.now();
+    let previous: any;
+    let reset = false;
+    let received = 0;
+    const countContacts = (contacts: any[]) => { received += contacts?.length || 0; };
+    try {
+      this.lastContactSyncError = null;
+      this.lastContactSyncStatus = 'starting';
+      if (now - this.lastContactSnapshotTime > 30 * 60 * 1000) {
+        previous = (await keys.get('app-state-sync-version', [collection]))?.[collection];
+        if (previous?.version) {
+          await keys.set({ 'app-state-sync-version': { [collection]: null } });
+          reset = true;
+        }
+      }
+      this.sock.ev.on('contacts.upsert', countContacts);
+      this.sock.ev.on('contacts.update', countContacts);
+      try {
+        await this.sock.resyncAppState([collection]);
+      } finally {
+        this.sock.ev.off('contacts.upsert', countContacts);
+        this.sock.ev.off('contacts.update', countContacts);
+      }
+      this.lastContactSnapshotTime = now;
+      this.lastContactSyncStatus = `done:${received}`;
+      if (this.contactRefreshTimer) clearTimeout(this.contactRefreshTimer);
+      this.contactRefreshTimer = null;
+      this.sanitizeUserGroupsAndMessages();
+      this.persistContacts();
+      this.persistDataImmediate();
+      this.emitGroupsThrottled();
+    } catch (error: any) {
+      if (reset && previous) {
+        try { await keys.set({ 'app-state-sync-version': { [collection]: previous } }); } catch {}
+      }
+      this.lastContactSyncError = error?.message || String(error);
+      this.lastContactSyncStatus = 'failed';
+      console.warn('تعذر مزامنة الأسماء المحفوظة من واتساب:', this.lastContactSyncError);
+    }
+  }
+
   public async syncGroups(force = false): Promise<WhatsAppGroupItem[]> {
     if (!this.sock || this.connectionStatus !== 'CONNECTED') {
       return this.userGroups;
@@ -2518,7 +2604,7 @@ export class WhatsAppManager {
           if (!this.appStateKeys) throw new Error('مخزن حالة واتساب غير متاح في الاتصال الحالي');
           // A normal resync starts at the stored version and misses archive actions
           // that happened on the phone before this linked device was connected.
-          if (this.archiveSnapshotRevision !== 3 || storeChanged || now - this.lastArchiveSnapshotTime > 30 * 60 * 1000) {
+          if (this.archiveSnapshotRevision !== 5 || storeChanged || now - this.lastArchiveSnapshotTime > 30 * 60 * 1000) {
             const previous = (await this.appStateKeys.get('app-state-sync-version', ['regular_low']))?.regular_low;
             this.lastArchiveSyncStatus = `version:${previous?.version ?? 'none'}`;
             if (previous?.version) {
@@ -2529,11 +2615,14 @@ export class WhatsAppManager {
                 throw new Error('تعذر إعادة قراءة حالة الأرشفة من بدايتها');
               }
               let archiveUpdates = 0;
+              let pinUpdates = 0;
               const captureArchiveUpdates = (updates: any[]) => {
                 for (const update of updates || []) {
-                  if (!update?.id || typeof update.archived !== 'boolean') continue;
+                  if (!update?.id) continue;
+                  if (update.pinned !== undefined) pinUpdates += 1;
+                  if (typeof update.archived !== 'boolean') continue;
                   archiveUpdates += 1;
-                  const chat = this.userGroups.find((group) => group.id === update.id);
+                  const chat = this.userGroups.find((group) => group.id === this.getCanonicalChatJid(update.id));
                   if (chat) chat.archived = update.archived;
                   else this.userGroups.push({
                     id: update.id,
@@ -2547,7 +2636,7 @@ export class WhatsAppManager {
               this.sock.ev.on('chats.update', captureArchiveUpdates);
               try {
                 await this.sock.resyncAppState(['regular_low']);
-                this.lastArchiveSyncStatus = `snapshot-done:${archiveUpdates}`;
+                this.lastArchiveSyncStatus = `snapshot-done:archive=${archiveUpdates}:pin=${pinUpdates}`;
                 if (archiveUpdates) {
                   this.persistDataImmediate();
                   this.emitGroupsThrottled();
@@ -2559,7 +2648,7 @@ export class WhatsAppManager {
                 this.sock.ev.off('chats.update', captureArchiveUpdates);
               }
               this.lastArchiveSnapshotTime = now;
-              this.archiveSnapshotRevision = 3;
+              this.archiveSnapshotRevision = 5;
             } else {
               await this.sock.resyncAppState(['regular_low']);
               this.lastArchiveSyncStatus = 'initial-done';
@@ -2577,6 +2666,7 @@ export class WhatsAppManager {
         this.lastArchiveSyncStatus = 'unsupported';
         this.lastArchiveSyncError = 'اتصال واتساب لا يدعم مزامنة حالة الأرشفة';
       }
+      await this.syncSavedContacts(force);
       const participatingGroups = await this.sock.groupFetchAllParticipating();
       for (const [id, grp] of Object.entries<any>(participatingGroups)) {
         const existing = this.userGroups.find((g) => g.id === id);
@@ -2767,7 +2857,7 @@ export class WhatsAppManager {
         found.unreadCount = (found.unreadCount || 0) + 1;
       }
     } else {
-      const resolved = this.resolveRealContact(senderJid, fromMe ? undefined : msg.pushName);
+      const resolved = this.resolveRealContact(senderJid, undefined, true);
       groupTitle = resolved.contactName;
 
       const found = this.userGroups.find(
@@ -3088,6 +3178,7 @@ export class WhatsAppManager {
         existing.unreadCount = Math.max(existing.unreadCount || 0, group.unreadCount || 0);
         existing.phone ||= group.phone;
         existing.avatarUrl ||= group.avatarUrl;
+        if (group.pinned !== undefined) existing.pinned = group.pinned;
         if ((!existing.name || existing.name.startsWith('+')) && group.name) existing.name = group.name;
       }
     }
@@ -3271,6 +3362,22 @@ export class WhatsAppManager {
       }
     }
     return false;
+  }
+
+  public async pinChat(chatIdOrName: string, pin: boolean): Promise<boolean> {
+    const group = this.userGroups.find((item) => item.id === chatIdOrName || item.name === chatIdOrName);
+    const jid = group?.id || chatIdOrName;
+    if (!jid.includes('@') || !this.sock || this.connectionStatus !== 'CONNECTED') return false;
+    try {
+      await this.sock.chatModify({ pin }, jid);
+      if (group) group.pinned = pin ? Date.now() : null;
+      this.persistDataImmediate();
+      this.events.emit('groups', this.getUserGroups());
+      return true;
+    } catch (error: any) {
+      console.warn('[WhatsApp] تعذر تحديث تثبيت المحادثة:', error?.message || error);
+      return false;
+    }
   }
 
   public toClientMessages(messages: ChatMessage[]): ChatMessage[] {

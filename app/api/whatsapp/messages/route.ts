@@ -292,6 +292,12 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    if (action === 'pin_chat' && (body.id || body.chatId || body.chatName || body.chat)) {
+      const target = body.id || body.chatId || body.chatName || body.chat;
+      const success = await wa.pinChat(target, Boolean(body.pin));
+      return NextResponse.json({ success, groups: wa.getUserGroups() }, { status: success ? 200 : 503 });
+    }
+
     if (action === 'rename_chat' && (body.id || body.chatId || body.chatName) && body.name) {
       const target = body.id || body.chatId || body.chatName;
       const success = wa.renameChat(target, body.name);
@@ -372,6 +378,8 @@ export async function POST(req: NextRequest) {
         groups,
         archiveSyncError: wa.lastArchiveSyncError,
         archiveSyncStatus: wa.lastArchiveSyncStatus,
+        contactSyncError: wa.lastContactSyncError,
+        contactSyncStatus: wa.lastContactSyncStatus,
         messages: wa.getClientMessages(),
         message: `تم تحديث المجموعات والمحادثات بنجاح (${groups.length} محادثة ومجموعة).`
       });
