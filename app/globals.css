@@ -1,0 +1,102 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+    --font-sans: 'Noto Sans Arabic', 'Segoe UI', Tahoma, Arial, sans-serif;
+    --background: #f8fafc;
+    --foreground: #0f172a;
+    --card: #ffffff;
+    --card-foreground: #0f172a;
+    --popover: #ffffff;
+    --popover-foreground: #0f172a;
+    --primary: #059669;
+    --primary-foreground: #ffffff;
+    --secondary: #f1f5f9;
+    --secondary-foreground: #1e293b;
+    --muted: #f1f5f9;
+    --muted-foreground: #64748b;
+    --accent: #ecfdf5;
+    --accent-foreground: #065f46;
+    --destructive: #ef4444;
+    --border: #e2e8f0;
+    --input: #e2e8f0;
+    --ring: #10b981;
+    --radius: 0.75rem;
+}
+
+.dark {
+    --font-sans: 'Noto Sans Arabic', 'Segoe UI', Tahoma, Arial, sans-serif;
+    --background: #090d16;
+    --foreground: #f8fafc;
+    --card: #111827;
+    --card-foreground: #f8fafc;
+    --popover: #111827;
+    --popover-foreground: #f8fafc;
+    --primary: #10b981;
+    --primary-foreground: #042f2e;
+    --secondary: #1e293b;
+    --secondary-foreground: #f8fafc;
+    --muted: #1e293b;
+    --muted-foreground: #94a3b8;
+    --accent: #132e29;
+    --accent-foreground: #34d399;
+    --destructive: #f87171;
+    --border: #1f293d;
+    --input: #1f293d;
+    --ring: #10b981;
+}
+
+* {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+    font-family: var(--font-sans);
+    background-color: var(--background);
+    color: var(--foreground);
+    text-rendering: optimizeLegibility;
+}
+
+/* Keep Android's pull gesture inside the app instead of refreshing the page. */
+html,
+body {
+    overscroll-behavior-y: none;
+}
+
+.fintech-mesh {
+    background-image: 
+        radial-gradient(at 10% 10%, rgba(16, 185, 129, 0.07) 0px, transparent 45%),
+        radial-gradient(at 90% 10%, rgba(99, 102, 241, 0.06) 0px, transparent 45%),
+        radial-gradient(at 50% 90%, rgba(14, 165, 233, 0.05) 0px, transparent 50%);
+}
+
+.glass-panel {
+    background: rgba(17, 24, 39, 0.7);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.light .glass-panel {
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.card-hover-glow {
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
+    will-change: transform, box-shadow;
+    transform: translateZ(0);
+}
+
+.card-hover-glow:hover {
+    transform: translateY(-2px) translateZ(0);
+    box-shadow: 0 12px 30px -10px rgba(16, 185, 129, 0.15);
+    border-color: rgba(16, 185, 129, 0.4);
+}

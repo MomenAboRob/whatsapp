@@ -1,0 +1,66 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+!.env.example
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# بيانات حساسة: جلسة واتساب وصور العملاء والوصولات
+/whatsapp_auth/
+/whatsapp_media/
+/whatsapp_avatars/
+/app_data/
+/public/uploads/
+/public/media/
+/public/avatars/
+public/tunnel-url.txt
+
+# local data and private development artifacts
+/scratch/
+/tests/
+/docs/
+/AGENTS.md
+/.agents/
+/.codex/
+/portal_form.html
+/post_res.html
+/scripts/sync-gym-data.cjs
+/public/mousa-receipt.svg
+*.db
+*.sqlite
+*.sqlite3
+*.bak
+*.log
+*.zip
+!/public/aqleeat-extension.zip

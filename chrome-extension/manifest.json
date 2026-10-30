@@ -1,0 +1,64 @@
+{
+  "manifest_version": 3,
+  "name": "مساعد تعبئة بوابة عقليات | نظام الحوالات",
+  "version": "2.8",
+  "description": "تعبئة بيانات المتدربين تلقائياً مع نافذة جانبية عائمة لسحب وإفلات صورة الوصل وسكرين شوت رسالة الواتساب مع قائمة تحكم بشريط المتصفح",
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png"
+    },
+    "default_title": "مساعد بوابة عقليات | نظام الحوالات"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://portal.aqleeat.com/*"
+      ],
+      "js": ["page-bridge.js"],
+      "run_at": "document_end",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "*://portal.aqleeat.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    },
+    {
+      "matches": [
+        "http://localhost:3010/*",
+        "http://127.0.0.1:3010/*",
+        "http://localhost:3000/*",
+        "http://127.0.0.1:3000/*",
+        "https://*.trycloudflare.com/*",
+        "https://*.pinggy.io/*",
+        "https://*.free.pinggy.net/*",
+        "https://*.loca.lt/*"
+      ],
+      "js": ["extension-bridge.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "host_permissions": [
+    "*://portal.aqleeat.com/*",
+    "http://localhost:3010/*",
+    "http://127.0.0.1:3010/*",
+    "http://localhost:3000/*",
+    "http://127.0.0.1:3000/*",
+    "https://*/*"
+  ]
+}
