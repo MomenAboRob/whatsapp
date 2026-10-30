@@ -282,7 +282,7 @@ export const WhatsappCrmPanel = React.memo(function WhatsappCrmPanel({
               rows={3}
               value={newNoteText}
               onChange={(e) => setNewNoteText(e.target.value)}
-              placeholder="اكتب ملاحظة داخلية خاصة بهذا العميل أو الحوالة..."
+              placeholder="اكتب ملاحظة داخلية خاصة بجهة الاتصال..."
               className="w-full bg-[#1d1f1f] border border-[#2e2f2f] rounded-xl p-2.5 text-xs text-[#fafafa] placeholder-[#a5a5a5] focus:outline-none focus:border-[#21c063] leading-relaxed resize-none"
             />
             <div className="flex justify-end">

@@ -23,7 +23,7 @@ export const QuickRepliesMenu = React.memo(function QuickRepliesMenu({
   onSelect,
   onClose,
   onOpenManager,
-  activeChatName = 'المشترك',
+  activeChatName = 'جهة الاتصال',
 }: QuickRepliesMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const selectedItemRef = useRef<HTMLDivElement>(null);
@@ -38,11 +38,11 @@ export const QuickRepliesMenu = React.memo(function QuickRepliesMenu({
 
   const getCategoryColor = (cat: QuickReplyTemplate['category']) => {
     switch (cat) {
-      case 'استلام وتدقيق':
+      case 'متابعة':
         return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
-      case 'إنجاز وصرف':
+      case 'ردود':
         return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
-      case 'حالات واستفسار':
+      case 'معلومات':
         return 'bg-sky-500/20 text-sky-300 border-sky-500/30';
       default:
         return 'bg-purple-500/20 text-purple-300 border-purple-500/30';

@@ -1,7 +1,7 @@
 {
-  "name": "نظام أتمتة وإدارة الحوالات",
-  "short_name": "الحوالات",
-  "description": "لوحة تحكم مركزية لأتمتة دورة حياة الحوالات والمراجعة السريعة ومزامنة أيرتيبل وبوابة عقليات",
+  "name": "واتساب",
+  "short_name": "واتساب",
+  "description": "محادثات واتساب من المتصفح",
   "start_url": "/",
   "id": "/",
   "display": "standalone",
@@ -9,8 +9,7 @@
   "theme_color": "#161717",
   "orientation": "portrait-primary",
   "categories": [
-    "finance",
-    "business",
+    "social",
     "productivity"
   ],
   "icons": [

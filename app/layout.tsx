@@ -14,14 +14,14 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "نظام أتمتة وإدارة الحوالات",
-  description: "لوحة تحكم مركزية لأتمتة دورة حياة الحوالات، المراجعة السريعة، والتسجيل في بوابة عقليات ومزامنة أيرتيبل",
+  title: "واتساب",
+  description: "إدارة محادثات واتساب من المتصفح",
   manifest: "/manifest.webmanifest",
-  applicationName: "الحوالات",
+  applicationName: "واتساب",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "الحوالات",
+    title: "واتساب",
   },
   formatDetection: {
     telephone: false,

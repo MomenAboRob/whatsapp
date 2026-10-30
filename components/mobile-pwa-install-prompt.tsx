@@ -102,7 +102,7 @@ export function MobilePWAInstallPrompt() {
       await deferredPrompt.prompt();
       const choiceResult = await deferredPrompt.userChoice;
       if (choiceResult.outcome === 'accepted') {
-        toast.success('جاري تثبيت تطبيق الحوالات على جهازك...', 'تثبيت التطبيق');
+        toast.success('جاري تثبيت تطبيق واتساب على جهازك...', 'تثبيت التطبيق');
         setShowPrompt(false);
       }
     } catch (err) {
@@ -142,7 +142,7 @@ export function MobilePWAInstallPrompt() {
           <div className="relative w-12 h-12 rounded-xl overflow-hidden bg-gradient-to-br from-emerald-500 to-[#128c7e] p-0.5 shadow-lg shrink-0">
             <img
               src="/icons/icon-192.png"
-              alt="شعار نظام الحوالات"
+              alt="شعار واتساب"
               className="w-full h-full object-cover rounded-[10px]"
             />
             <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-400 rounded-full border-2 border-[#181a1b]" />
@@ -151,7 +151,7 @@ export function MobilePWAInstallPrompt() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <h4 className="text-sm font-bold text-white tracking-wide">
-                {platform === 'ios' ? 'تثبيت التطبيق على آيفون' : 'تثبيت تطبيق الحوالات'}
+                {platform === 'ios' ? 'تثبيت التطبيق على آيفون' : 'تثبيت تطبيق واتساب'}
               </h4>
               <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#21c063]/20 text-[#21c063]">
                 مجاني

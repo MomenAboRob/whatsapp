@@ -60,15 +60,15 @@ export const QuickRepliesModal = React.memo(function QuickRepliesModal({
   }>({
     title: '',
     shortcut: '',
-    category: 'استلام وتدقيق',
+    category: 'عام',
     content: '',
   });
 
   const categories: Array<QuickReplyTemplate['category']> = [
-    'استلام وتدقيق',
-    'إنجاز وصرف',
-    'حالات واستفسار',
     'عام',
+    'معلومات',
+    'متابعة',
+    'ردود',
   ];
 
   const filteredTemplates = useMemo(() => {
@@ -92,7 +92,7 @@ export const QuickRepliesModal = React.memo(function QuickRepliesModal({
     setFormData({
       title: '',
       shortcut: '',
-      category: 'استلام وتدقيق',
+      category: 'عام',
       content: '',
     });
   };
@@ -265,7 +265,7 @@ export const QuickRepliesModal = React.memo(function QuickRepliesModal({
                         shortcut: e.target.value.replace(/\s+/g, '_'),
                       })
                     }
-                    placeholder="مثال: وصل أو تم_الاستلام"
+                    placeholder="مثال: ترحيب أو متابعة"
                     className="w-full bg-transparent text-xs text-[#fafafa] focus:outline-none font-mono"
                   />
                 </div>
@@ -471,15 +471,15 @@ export const QuickRepliesModal = React.memo(function QuickRepliesModal({
 
             {/* الشريط السفلي: استعادة القوالب وإغلاق */}
             <div className="pt-3 border-t border-[#2e2f2f] flex items-center justify-between">
-              <button
+              {DEFAULT_QUICK_REPLIES.length > 0 && <button
                 type="button"
                 onClick={handleResetDefaults}
                 className="text-xs text-[#a5a5a5] hover:text-amber-400 flex items-center gap-1.5 transition-colors cursor-pointer"
-                title="استعادة القوالب الافتراضية الثمانية للحوالات"
+                title="استعادة القوالب الافتراضية"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span>استعادة القوالب الافتراضية</span>
-              </button>
+              </button>}
 
               <Button
                 variant="outline"

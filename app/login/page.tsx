@@ -66,7 +66,7 @@ export default function LoginPage() {
           </div>
           <div className="flex flex-col gap-1">
             <h1 className="text-xl sm:text-2xl font-black text-[#fafafa] tracking-tight">
-              نظام إدارة وأتمتة الحوالات
+              واتساب
             </h1>
             <p className="text-xs sm:text-sm text-[#a5a5a5]">
               تسجيل الدخول للموظفين والإداريين المعتمدين

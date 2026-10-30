@@ -1256,6 +1256,14 @@ export function WhatsAppChatInterface({
       return new Set();
     }
   });
+  const [manualPinOverrides, setManualPinOverrides] = useState<Record<string, boolean>>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? localStorage.getItem('whatsapp_manual_pin_overrides') : null;
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
 
   // 2. أرشفة المحادثات (Archived Chats)
   const [archivedChatKeys, setArchivedChatKeys] = useState<Set<string>>(new Set());
@@ -1294,10 +1302,12 @@ export function WhatsAppChatInterface({
   const [customLists, setCustomLists] = useState<Record<string, string[]>>(() => {
     try {
       const saved = typeof window !== 'undefined' ? localStorage.getItem('hawalat_custom_lists') : null;
-      if (saved) return JSON.parse(saved);
-      return { 'المفضلة': [], 'حوالات': [] };
+      if (saved) return Object.fromEntries(
+        Object.entries(JSON.parse(saved) as Record<string, string[]>).filter(([name]) => !/حوال|airtable|أيرتيبل|ايرتيبل/i.test(name))
+      ) as Record<string, string[]>;
+      return { 'المفضلة': [] };
     } catch {
-      return { 'المفضلة': [], 'حوالات': [] };
+      return { 'المفضلة': [] };
     }
   });
   const [listsLoaded, setListsLoaded] = useState(false);
@@ -1311,12 +1321,18 @@ export function WhatsAppChatInterface({
         const data = await response.json();
         if (cancelled) return;
         if (data.exists && data.lists && typeof data.lists === 'object') {
-          setCustomLists(data.lists);
+          const lists = Object.fromEntries(
+            Object.entries(data.lists as Record<string, string[]>).filter(([name]) => !/حوال|airtable|أيرتيبل|ايرتيبل/i.test(name))
+          ) as Record<string, string[]>;
+          setCustomLists(lists);
         } else {
           const previousOwner = localStorage.getItem('hawalat_custom_lists_owner');
           const initialLists = !previousOwner || previousOwner === data.userId
             ? customLists
-            : { 'المفضلة': [], 'حوالات': [] };
+            : { 'المفضلة': [] };
+          for (const name of Object.keys(initialLists)) {
+            if (/حوال|airtable|أيرتيبل|ايرتيبل/i.test(name)) delete initialLists[name];
+          }
           setCustomLists(initialLists);
           localStorage.setItem('hawalat_custom_lists_owner', data.userId);
           await fetch('/api/whatsapp/lists', {
@@ -1377,6 +1393,12 @@ export function WhatsAppChatInterface({
       localStorage.setItem('hawalat_pinned_chats', JSON.stringify(Array.from(pinnedChatKeys)));
     } catch {}
   }, [pinnedChatKeys]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('whatsapp_manual_pin_overrides', JSON.stringify(manualPinOverrides));
+    } catch {}
+  }, [manualPinOverrides]);
 
   useEffect(() => {
     try {
@@ -1654,6 +1676,10 @@ export function WhatsAppChatInterface({
   }, [activeGroup, realGroups]);
 
   const isChatPinned = (chat: any): boolean => {
+    const key = chat?.id || chat?.name;
+    if (key && Object.prototype.hasOwnProperty.call(manualPinOverrides, key)) {
+      return manualPinOverrides[key];
+    }
     if (chat?.pinned !== undefined) return Boolean(chat.pinned);
     return Boolean(chat && (pinnedChatKeys.has(chat.id || '') || pinnedChatKeys.has(chat.name)));
   };
@@ -1663,6 +1689,7 @@ export function WhatsAppChatInterface({
     const key = chat.id || chat.name;
     const pin = !isChatPinned(chat);
     setChatContextMenu(null);
+    setManualPinOverrides((prev) => ({ ...prev, [key]: pin }));
     try {
       const response = await fetch('/api/whatsapp/messages', {
         method: 'POST',
@@ -1672,6 +1699,11 @@ export function WhatsAppChatInterface({
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error('pin failed');
       if (Array.isArray(data.groups)) setRealGroups(data.groups);
+      setManualPinOverrides((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
       setPinnedChatKeys((prev) => {
         const next = new Set(prev);
         next.delete(key);
@@ -1681,7 +1713,7 @@ export function WhatsAppChatInterface({
       if (pin) toast.success('تم تثبيت المحادثة في أعلى القائمة.');
       else toast.info('تم إلغاء تثبيت المحادثة.');
     } catch {
-      toast.warning('تعذر مزامنة التثبيت مع واتساب. تحقق من الاتصال.');
+      toast.info(pin ? 'تم تثبيت المحادثة في التطبيق.' : 'تم إلغاء تثبيت المحادثة في التطبيق.');
     }
   };
 
@@ -2944,7 +2976,7 @@ export function WhatsAppChatInterface({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          setCustomForwardLists(parsed);
+          setCustomForwardLists(parsed.filter((list: { name: string }) => !/حوال|airtable|أيرتيبل|ايرتيبل/i.test(list.name)));
           return;
         }
       }
@@ -3275,7 +3307,7 @@ export function WhatsAppChatInterface({
         const resolvedFileName =
           msg.fileName ||
           (isLinkedReceipt
-            ? (rawUrl.split('/').pop() || 'إيصال حوالة.pdf')
+            ? (rawUrl.split('/').pop() || 'مستند.pdf')
             : (rawUrl.split('/').pop() || 'مستند'));
         return (
           <div className="relative my-1 max-w-[340px]">
@@ -4354,22 +4386,6 @@ export function WhatsAppChatInterface({
     } catch (e) {}
   }, []);
 
-  useEffect(() => {
-    let lastRefreshAt = 0;
-    const refreshWhenVisible = () => {
-      if (document.visibilityState !== 'visible' || Date.now() - lastRefreshAt < 6 * 60 * 60_000) return;
-      lastRefreshAt = Date.now();
-      void fetchAirtableRecords();
-    };
-    refreshWhenVisible();
-    const interval = setInterval(refreshWhenVisible, 6 * 60 * 60_000);
-    document.addEventListener('visibilitychange', refreshWhenVisible);
-    return () => {
-      clearInterval(interval);
-      document.removeEventListener('visibilitychange', refreshWhenVisible);
-    };
-  }, [fetchAirtableRecords]);
-
   const syncWithAirtable = async (msgs: any[]) => {
     try {
       const res = await fetch('/api/transfers/airtable?registration=1');
@@ -4473,7 +4489,6 @@ export function WhatsAppChatInterface({
           } else {
             setMessages(data.messages);
             lastFullMessageSyncAtRef.current = Date.now();
-            if (!skipAirtableSync) syncWithAirtable(data.messages);
           }
           if (Number.isFinite(data.snapshotAt)) {
             lastMessageSnapshotAtRef.current = Math.max(lastMessageSnapshotAtRef.current, data.snapshotAt);
@@ -6122,14 +6137,8 @@ export function WhatsAppChatInterface({
 
   const isMsgRead = useCallback((msg: any) => {
     if (!msg) return false;
-    const status = actionStatus[msg.id] || {};
-    // مسار سريع O(1): إذا كانت الرسالة مقروءة أو مسجلة في أيرتيبل أو مستلمة نتجاوز الفحص المعقد فوراً
-    if (msg.read || status.read || msg.status?.read) return true;
-    if (status.airtable || status.airtableSaved || msg.status?.airtable || msg.status?.airtableSaved) return true;
-    if (status.isReceived || msg.status?.isReceived || status.forwardedTo?.includes('استلام')) return true;
-    if (checkIsRegisteredInAirtable(msg)) return true;
-    return checkIsUploadedInGroup(msg);
-  }, [actionStatus, checkIsUploadedInGroup, checkIsRegisteredInAirtable]);
+    return Boolean(msg.read || actionStatus[msg.id]?.read || msg.status?.read);
+  }, [actionStatus]);
 
   // زر الرجوع في رأس المحادثة يسلك نفس مسار زر الرجوع في الهاتف.
   const handleMobileBack = () => {
@@ -7635,8 +7644,12 @@ export function WhatsAppChatInterface({
     return list.sort((a, b) => {
       const aKey = a.id || a.name;
       const bKey = b.id || b.name;
-      const aPinned = a.pinned !== undefined ? Boolean(a.pinned) : pinnedChatKeys.has(aKey) || pinnedChatKeys.has(a.name);
-      const bPinned = b.pinned !== undefined ? Boolean(b.pinned) : pinnedChatKeys.has(bKey) || pinnedChatKeys.has(b.name);
+      const aPinned = Object.prototype.hasOwnProperty.call(manualPinOverrides, aKey)
+        ? manualPinOverrides[aKey]
+        : a.pinned !== undefined ? Boolean(a.pinned) : pinnedChatKeys.has(aKey) || pinnedChatKeys.has(a.name);
+      const bPinned = Object.prototype.hasOwnProperty.call(manualPinOverrides, bKey)
+        ? manualPinOverrides[bKey]
+        : b.pinned !== undefined ? Boolean(b.pinned) : pinnedChatKeys.has(bKey) || pinnedChatKeys.has(b.name);
       if (aPinned && !bPinned) return -1;
       if (!aPinned && bPinned) return 1;
 
@@ -7648,7 +7661,7 @@ export function WhatsAppChatInterface({
       }
       return a.name.localeCompare(b.name, 'ar');
     });
-  }, [realGroups, messages, isMsgRead, readChatKeys, activeGroup, pinnedChatKeys, markedUnreadChatKeys]);
+  }, [realGroups, messages, isMsgRead, readChatKeys, activeGroup, pinnedChatKeys, manualPinOverrides, markedUnreadChatKeys]);
 
   // قائمة جميع المحادثات والمجموعات المتاحة للتحويل بدون تكرار
   const allForwardableChats = useMemo(() => {
@@ -8124,9 +8137,9 @@ export function WhatsAppChatInterface({
   };
 
   return (
-    <div className="w-full h-full bg-[#161717] flex flex-col md:flex-row font-sans select-none overflow-hidden" dir="rtl">
+    <div className="w-full h-full bg-[#161717] flex flex-col md:flex-row font-sans select-none overflow-hidden" dir="ltr">
       {/* القائمة الجانبية للمحادثات (شريط واتساب الجانبي الممتد عمودياً بالكامل) */}
-      <div className={`${isPopoutMode ? 'hidden' : activeGroup ? 'hidden md:flex' : 'flex'} w-full md:w-80 lg:w-[380px] bg-[#161717] border-l border-[#2e2f2f] flex-col shrink-0 h-full`}>
+      <div className={`${isPopoutMode ? 'hidden' : activeGroup ? 'hidden md:flex' : 'flex'} w-full md:w-80 lg:w-[380px] bg-[#161717] border-r border-[#2e2f2f] flex-col shrink-0 h-full`}>
         {/* رأس الشريط الجانبي مع حالة الاتصال الحية المباشرة */}
         <div className="px-3.5 py-3 bg-[#161717] flex items-center justify-between gap-2 border-b border-[#2e2f2f] shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -8150,14 +8163,14 @@ export function WhatsAppChatInterface({
             <div className="flex flex-col min-w-0">
               <div className="flex items-center gap-1.5">
                 <span className="text-sm font-bold text-[#fafafa] truncate">
-                  {waStatus.user?.name ? `واتساب: ${waStatus.user.name}` : 'واتساب الحوالات'}
+                  {waStatus.user?.name ? `واتساب: ${waStatus.user.name}` : 'واتساب'}
                 </span>
               </div>
               <div className="flex items-center gap-1">
                 {waStatus.status === 'CONNECTED' ? (
                   <span className="text-[11px] font-medium text-emerald-400 flex items-center gap-1 whitespace-nowrap">
                     <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
-                    <span>متصل (<bdi dir="ltr">{waStatus.user?.phone ? (waStatus.user.phone.startsWith('+') ? waStatus.user.phone : `+${waStatus.user.phone}`) : '+970 56 724 6963'}</bdi>)</span>
+                    <span>متصل{waStatus.user?.phone && <> (<bdi dir="ltr">{waStatus.user.phone.startsWith('+') ? waStatus.user.phone : `+${waStatus.user.phone}`}</bdi>)</>}</span>
                   </span>
                 ) : waStatus.status === 'CONNECTING' ? (
                   <span className="text-[11px] font-medium text-blue-400 flex items-center gap-1 whitespace-nowrap">
@@ -8183,6 +8196,15 @@ export function WhatsAppChatInterface({
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
+            {waStatus.status === 'CONNECTED' && <button
+              type="button"
+              onClick={onOpenQRModal}
+              className="w-8 h-8 rounded-full flex items-center justify-center text-[#a5a5a5] hover:text-[#21c063] hover:bg-[#202c33] transition-colors cursor-pointer"
+              title="إدارة ربط واتساب عبر QR"
+              aria-label="إدارة ربط واتساب عبر QR"
+            >
+              <QrCode className="w-4 h-4" />
+            </button>}
             {waStatus.status === 'CONNECTED' ? (
               <button
                 type="button"
@@ -8428,9 +8450,15 @@ export function WhatsAppChatInterface({
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between">
-                              <span className="text-sm font-semibold text-[#fafafa] truncate" dir="auto">
-                                <bdi>{g.name}</bdi>
-                              </span>
+                              <div className="flex items-center gap-1 min-w-0">
+                                <span className="text-sm font-semibold text-[#fafafa] truncate" dir="auto"><bdi>{g.name}</bdi></span>
+                                <button type="button" onClick={(e) => { e.stopPropagation(); void togglePinChat(g); }}
+                                  className={`shrink-0 rounded p-1 transition-colors hover:bg-[#2e2f2f] ${isChatPinned(g) ? 'text-[#21c063]' : 'text-[#8696a0] hover:text-[#21c063]'}`}
+                                  title={isChatPinned(g) ? 'إلغاء تثبيت المحادثة' : 'تثبيت المحادثة'}
+                                  aria-label={isChatPinned(g) ? `إلغاء تثبيت ${g.name}` : `تثبيت ${g.name}`}>
+                                  <Pin className={`h-3.5 w-3.5 ${isChatPinned(g) ? 'fill-current' : ''}`} />
+                                </button>
+                              </div>
                               <span className="text-xs text-[#8696a0] shrink-0">{g.time}</span>
                             </div>
                             <div className="text-xs text-[#8696a0] truncate mt-0.5">
@@ -8680,14 +8708,17 @@ export function WhatsAppChatInterface({
 
                     <div className="flex-1 min-w-0 flex flex-col justify-center">
                       <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold text-[#fafafa] truncate" dir="auto">
-                          <bdi>{g.name}</bdi>
-                        </span>
+                        <div className="flex items-center gap-1 min-w-0">
+                          <span className="text-sm font-semibold text-[#fafafa] truncate" dir="auto"><bdi>{g.name}</bdi></span>
+                          <button type="button" onClick={(e) => { e.stopPropagation(); void togglePinChat(g); }}
+                            className={`shrink-0 rounded p-1 transition-colors hover:bg-[#3b3d3d] ${isChatPinned(g) ? 'text-[#21c063]' : 'text-[#8696a0] hover:text-[#21c063]'}`}
+                            title={isChatPinned(g) ? 'إلغاء تثبيت المحادثة' : 'تثبيت المحادثة'}
+                            aria-label={isChatPinned(g) ? `إلغاء تثبيت ${g.name}` : `تثبيت ${g.name}`}>
+                            <Pin className={`h-3.5 w-3.5 ${isChatPinned(g) ? 'fill-current' : ''}`} />
+                          </button>
+                        </div>
                         <div className="flex items-center gap-1.5 shrink-0">
                           <span className="text-[11px] text-[#a5a5a5]">{g.time}</span>
-                          {isChatPinned(g) && (
-                            <Pin className="w-3.5 h-3.5 text-[#8696a0] rotate-45 shrink-0" />
-                          )}
                           {Boolean(mutedChats[g.id || g.name]) && (
                             <VolumeX className="w-3.5 h-3.5 text-[#8696a0] shrink-0" />
                           )}
@@ -8959,7 +8990,7 @@ export function WhatsAppChatInterface({
               اختر محادثة لعرضها
             </h2>
             <p className="text-xs sm:text-sm text-[#a5a5a5] max-w-md leading-relaxed mb-6">
-              المحادثات مغلقة افتراضياً. انقر على أي محادثة أو مجموعة من القائمة الجانبية لعرض الرسائل والحوالات، أو ابدأ محادثة مباشرة جديدة.
+              انقر على أي محادثة أو مجموعة من القائمة الجانبية لعرض الرسائل، أو ابدأ محادثة جديدة.
             </p>
 
             <div className="flex flex-wrap items-center justify-center gap-3">
@@ -8972,10 +9003,6 @@ export function WhatsAppChatInterface({
               </Button>
             </div>
 
-            <div className="mt-16 flex items-center gap-2 text-xs text-[#a5a5a5]/70 border-t border-[#2e2f2f] pt-6">
-              <ShieldCheck className="w-4 h-4 text-[#21c063]" />
-              <span>نظام إدارة الحوالات الفوري - مشفر وآمن ومربوط بـ Airtable</span>
-            </div>
           </div>
         ) : (
           <>
@@ -9009,53 +9036,6 @@ export function WhatsAppChatInterface({
 
             {/* الطرف الأيسر: أيقونات الإجراءات (رد، نجمة، حذف، نسخ، تحويل ➡️، 3 نقاط) */}
             <div className="flex items-center gap-1 sm:gap-2">
-              {/* زر شبك صورة الوصل مع نص الحوالة (يظهر للجوال وسطح المكتب عند تحديد وصل + نص أو عدة نصوص) */}
-              {canLinkSelected && (
-                <Button
-                  size="sm"
-                  onClick={handleLinkSelectedMessages}
-                  className="flex h-8 text-xs font-black gap-1.5 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-lg px-2 sm:px-3 shadow-md"
-                  title="شبك صورة الوصل المحددة مع نصوص الحوالات"
-                >
-                  <Link2 className="w-4 h-4 text-white shrink-0" />
-                  <span className="hidden sm:inline">
-                    {isTwoImagesSelected
-                      ? 'شبك الصورتين'
-                      : (selectedTextMsgs && selectedTextMsgs.length > 1)
-                      ? `شبك الوصل مع (${selectedTextMsgs.length}) حوالات`
-                      : 'شبك الوصل مع الحوالة'}
-                  </span>
-                  <span className="sm:hidden">
-                    {isTwoImagesSelected ? 'شبك الصورتين' : 'شبك الوصل'}
-                  </span>
-                </Button>
-              )}
-
-              {/* زر فك الشبك في حال تم تحديد حوالة مشبوكة */}
-              {selectedHasLinkedReceipt && !canLinkSelected && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleUnlinkSelectedMessages}
-                  className="flex h-8 text-xs font-bold gap-1.5 border-rose-500/50 bg-rose-500/15 text-rose-300 hover:bg-rose-500/25 rounded-lg px-2 sm:px-3 cursor-pointer"
-                  title="فك ارتباط صورة الوصل عن الحوالة المحددة"
-                >
-                  <Link2 className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                  <span className="hidden sm:inline">فك الشبك ✕</span>
-                  <span className="sm:hidden">فك</span>
-                </Button>
-              )}
-
-              {/* زر تحديد الرسائل المحددة كـ تم الاستلام */}
-              <button
-                type="button"
-                onClick={handleToggleReceivedForSelected}
-                className="text-[#aebac1] hover:text-purple-400 p-2 rounded-full hover:bg-white/10 active:bg-white/20 transition-colors cursor-pointer"
-                title="تحديد الرسائل المحددة كـ تم الاستلام"
-              >
-                <CheckCircle2 className="w-5 h-5 text-purple-400" />
-              </button>
-
               {/* رد (إذا كانت رسالة واحدة فقط محددة كواتساب الأصلي) */}
               {selectedMsgIds.length === 1 && (
                 <button
@@ -9176,36 +9156,6 @@ export function WhatsAppChatInterface({
                         </>
                       );
                     })()}
-                    {canLinkSelected && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectionMenuOpen(false);
-                          handleLinkSelectedMessages();
-                        }}
-                        className="w-full text-right px-3 py-2 hover:bg-[#182229] rounded-lg transition-colors flex items-center justify-between cursor-pointer text-emerald-400 font-bold"
-                      >
-                        <span>
-                          {isTwoImagesSelected
-                            ? 'شبك الصورتين معاً'
-                            : (selectedTextMsgs && selectedTextMsgs.length > 1)
-                            ? `شبك الوصل مع (${selectedTextMsgs.length}) حوالات`
-                            : 'شبك الوصل مع الحوالة'}
-                        </span>
-                        <Link2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectionMenuOpen(false);
-                        handleToggleReceivedForSelected();
-                      }}
-                      className="w-full text-right px-3 py-2 hover:bg-[#182229] rounded-lg transition-colors flex items-center justify-between cursor-pointer text-purple-300 font-medium"
-                    >
-                      <span>تحديد كـ تم الاستلام ({selectedMsgIds.length})</span>
-                      <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0" />
-                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -9562,38 +9512,8 @@ export function WhatsAppChatInterface({
                 }
                 const msg = item.msg;
                 const msgIdx = item.index;
-              const parsed = getCachedParsedTransfer(msg.text, msg);
-              const status = actionStatus[msg.id] || {};
-              const isProcessing = processingMsgId === msg.id;
               const isSelected = selectedMsgIds.includes(msg.id);
 
-              // تحديد الحالة الشاملة للرسالة بدقة فائقة
-              const currentStatus = {
-                ...(msg.status || {}),
-                ...status,
-              };
-
-              const hasAirtable = Boolean(
-                currentStatus.airtable ||
-                currentStatus.airtableSaved
-              );
-
-              // البوابة: تُعتبر الحوالة مسجلة في البوابة حصراً إذا وُجدت بياناتها المؤكدة في مجموعة "حوالات تم رفعها"
-              const isUploadedInGroup = checkIsUploadedInGroup(msg, parsed);
-              const effectivePortal = isUploadedInGroup;
-
-              // أيرتيبل: تُعتبر مسجلة في أيرتيبل إذا كانت موجودة في قاعدة بيانات أيرتيبل الفعلية أو مسجلة محلياً
-              const isRegisteredInAirtable = checkIsRegisteredInAirtable(msg, parsed);
-              const effectiveAirtable = hasAirtable || isRegisteredInAirtable;
-
-              const isRegistered = effectiveAirtable || effectivePortal;
-
-              const isReceived = Boolean(
-                currentStatus.isReceived ||
-                currentStatus.forwardedTo?.includes('استلام')
-              );
-
-              const isBoth = (effectiveAirtable && effectivePortal) || (isRegistered && isReceived);
               const isFromMe = Boolean(
                 msg.sender === 'أنا' ||
                 msg.senderName === 'أنا' ||
@@ -9632,22 +9552,7 @@ export function WhatsAppChatInterface({
               (msg.text === 'ملصق' && msg.hasMedia)
             );
 
-            // فحص هل الرسالة تحتوي على بيانات متدربين فعلية
-            const hasTraineeName = !isStickerMsg && Boolean(parsed.participantName && parsed.participantName.trim().length >= 3);
-            const hasTraineeFormHeaders = !isStickerMsg && /(اسم\s*(المشترك|المتدرب|الطالب|العميل)|بيانات\s*(البوابة|المتدرب|المشترك|الدخول)|قيمة\s*الرسوم)/i.test(msg.text || '');
-            const hasExplicitTransferData = !isStickerMsg && Boolean(
-              parsed.transferNumber &&
-              /حوال[ةه]|دينار|شيكل|دولار|إيداع|ايداع|بنك|كاش|تسليم|ايصال|إيصال|وصل|عقليات|سند|قبض|صراف|دفعة|دفع|تحويل/.test(msg.text || '')
-            );
-            const hasTraineeData = Boolean(hasTraineeName || hasTraineeFormHeaders || hasExplicitTransferData);
-
-            // تظهر بطاقة إجراءات الحوالة حصراً على الرسائل التي تحتوي على بيانات متدربين
-            // ولا تظهر نهائياً للصور المستقلة أو الإيصالات المجردة لتظل واجهة الصور نظيفة كواتساب
-            const isTransfer = !msg.uploadState && !isStickerMsg && hasTraineeData;
-
-            // في حال كانت الرسالة عادية (محادثة أو نص قصير أو ملصق أو إيموجي) وليست حوالة أو بيانات متدرب
-            if (!isTransfer) {
-              return (
+            return (
                 <React.Fragment key={msg.id}>
                 {timelineMarkers}
                 <div
@@ -9912,17 +9817,6 @@ export function WhatsAppChatInterface({
                                     </>
                                   )}
                                 </button>
-                                <button
-                                  onClick={() => {
-                                    closeAllPopups();
-                                    const effReceipt = getEffectiveReceipt(msg);
-                                    onOpenReview(parsed, effReceipt?.receiptUrl || msg.mediaUrl, msg.id);
-                                  }}
-                                  className="text-right px-2.5 py-1.5 hover:bg-[#1d1f1f] text-[#fafafa] rounded-md flex items-center gap-2 cursor-pointer"
-                                >
-                                  <FileText className="w-3.5 h-3.5 text-[#21c063]" />
-                                  <span>تسجيل كحوالة / مراجعة</span>
-                                </button>
                               </div>
                             )}
                           </div>
@@ -9937,495 +9831,12 @@ export function WhatsAppChatInterface({
                 </div>
                 </React.Fragment>
               );
-            }
-
-            // رسالة متدرب أو إيصال حوالة مالية: تظهر فقاعة واتساب أصلية ونظيفة، وأزرار الإجراءات تظهر على الجانب عند تمرير الماوس
-            return (
-              <React.Fragment key={msg.id}>
-              {timelineMarkers}
-              <div
-                key={msg.id}
-                id={`msg_${msg.id}`}
-                className={`w-full flex ${isFromMe ? 'justify-start' : 'justify-end'} group relative select-none my-1.5 transition-all duration-200 ${
-                  isSelected ? 'bg-[#005c4b]/20 -mx-3 px-3 py-1 rounded-lg' : ''
-                }`}
-              >
-                <div
-                  className={`relative flex items-start gap-2 w-fit max-w-[85%] sm:max-w-[75%] lg:max-w-[560px] ${
-                    isFromMe ? 'ml-auto mr-0' : 'mr-auto ml-0 flex-row-reverse'
-                  }`}
-                >
-                  {senderAvatarEl}
-
-                  {/* فقاعة رسالة واتساب الطبيعية والنظيفة 100% تماماً كرسالة واتساب الحقيقية */}
-                  <div
-                    onContextMenu={(e) => handleContextMenu(e, msg, true)}
-                    {...getMsgTouchProps(msg, true)}
-                    onDoubleClick={() => handleStartReply(msg)}
-                    onClick={() => {
-                      if (isSelectionMode) {
-                        handleToggleSelectMsg(msg.id);
-                      }
-                    }}
-                    className={`text-[#fafafa] rounded-2xl ${
-                      isFromMe
-                        ? 'rounded-tr-xs bg-[#144d37] border border-[#144d37]/30 shadow-xs'
-                        : 'rounded-tl-xs bg-[#242626] border border-[#2e2f2f]/60 shadow-xs'
-                    } px-3.5 py-2 w-fit max-w-full flex flex-col gap-1 relative touch-pan-y [-webkit-touch-callout:none] transition-all duration-200 ${
-                      highlightedMsgId === msg.id
-                        ? 'ring-4 ring-[#21c063] ring-offset-2 ring-offset-[#161717] bg-[#21c063]/30 scale-[1.01] shadow-2xl'
-                        : isSelected
-                        ? 'ring-1.5 ring-[#00a884]/80 !bg-[#025144]/60'
-                        : ''
-                    } ${msg.reactions && msg.reactions.length > 0 ? 'mb-3.5' : ''} ${isSelectionMode ? 'cursor-pointer hover:brightness-110' : ''}`}
-                  >
-                    {/* رأس الرسالة: اسم المرسل وشارة الحالة المصغرة غير المعيقة */}
-                    <div className="flex items-center justify-between gap-2.5 select-none">
-                      {!isFromMe ? (
-                        <span className="text-[12.5px] font-bold block truncate max-w-[220px]" style={{ color: isGroupChat ? senderColor : '#53bdeb' }} dir="auto">
-                          <bdi>{msg.sender}</bdi>
-                        </span>
-                      ) : (
-                        <span className="text-[11px] font-bold text-emerald-300/80">أنا</span>
-                      )}
-
-                      {/* شارات المنصات المسجلة بدقة: أيرتيبل (داتا بيس) والبوابة (بوابة) واستلام */}
-                      <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
-                        {effectiveAirtable && (
-                          <span
-                            title="مسجلة في قاعدة بيانات أيرتيبل (Airtable)"
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/40 text-[10px] font-bold shadow-xs hover:bg-blue-500/30 transition-all cursor-default"
-                          >
-                            <Database className="w-3 h-3 text-blue-400 stroke-[2.5]" />
-                            <span>أيرتيبل</span>
-                          </span>
-                        )}
-
-                        {effectivePortal && (
-                          <span
-                            title="مسجلة في بوابة عقليات"
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold shadow-xs hover:bg-emerald-500/30 transition-all cursor-default"
-                          >
-                            <Globe className="w-3 h-3 text-emerald-400 stroke-[2.5]" />
-                            <span>البوابة</span>
-                          </span>
-                        )}
-
-                        {isReceived && (
-                          <span
-                            title="تم استلام الحوالة (كاش/تحويل)"
-                            className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[10px] font-bold shadow-xs hover:bg-purple-500/30 transition-all cursor-default"
-                          >
-                            <CheckCircle2 className="w-3 h-3 text-purple-400 stroke-[2.5]" />
-                            <span>مستلمة</span>
-                          </span>
-                        )}
-
-                        {/* زر استلام / تم الاستلام المخصص للجوال */}
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleToggleReceived(msg);
-                          }}
-                          className={`md:hidden inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold border transition-all cursor-pointer active:scale-95 ${
-                            isReceived
-                              ? 'bg-purple-600/30 text-purple-200 border-purple-500/60 shadow-xs'
-                              : 'bg-white/10 text-white/80 border-white/20 hover:bg-white/15'
-                          }`}
-                          title={isReceived ? 'إلغاء وسم الاستلام' : 'تحديد الحوالة بأنها تم استلامها'}
-                        >
-                          <CheckCircle2 className={`w-3.5 h-3.5 ${isReceived ? 'text-purple-400' : 'text-gray-300'}`} />
-                          <span>{isReceived ? 'تم الاستلام' : 'استلام'}</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* شارة التحذير إذا كانت رسالة الحوالة قد حذفت في واتساب (Anti-Delete) */}
-                    {msg.isDeleted && (
-                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-500/15 border border-red-500/30 text-red-300 text-[11px] font-bold mb-1 w-fit select-none">
-                        <AlertCircle className="w-3.5 h-3.5 text-red-400 inline" />
-                        <span>تم حذف هذه الرسالة في واتساب</span>
-                        {msg.deletedAt && (
-                          <span className="text-[10px] text-red-400/80 mr-0.5">
-                            ({new Date(msg.deletedAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })})
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    {/* معاينة الرسالة المقتبس منها (الرد على رسالة) إن وجدت */}
-                    {msg.quotedMessage && renderQuotedMessagePreview(msg.quotedMessage, isFromMe)}
-
-                    {/* وسائط الحوالة أو صورة الإيصال بمظهر واتساب نظيف وتفاعلي مع إمكانية الفتح داخل الصفحة */}
-                    {renderMessageMedia(msg, isFromMe)}
-
-                    {/* إذا كانت الرسالة معدلة ولديها نص قديم، يظهر فوق الرسالة بخط خفيف وشطب خفيف */}
-                    {Boolean(msg.isEdited && msg.originalText) && (
-                      <div className="mb-1 p-1.5 px-2 rounded-lg bg-black/25 border-r-2 border-amber-400/70 text-[11.5px] text-[#a5a5a5] select-none">
-                        <div className="flex items-center gap-1 text-[10px] text-amber-300/90 font-bold mb-0.5">
-                          <Pencil className="w-2.5 h-2.5" />
-                          <span>الرسالة السابقة:</span>
-                        </div>
-                        <div className="line-through opacity-75 font-sans whitespace-pre-wrap break-words italic">
-                          {msg.originalText}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* نص الحوالة / المشترك: نظيف وطبيعي 100% مثل واتساب الحقيقي (لا يُعرض نص إذا كانت الكلمة 'صورة') */}
-                    {Boolean(
-                      msg.text &&
-                        !['ملصق', 'صورة', 'مقطع فيديو', 'تسجيل صوتي', 'مقطع صوتي'].includes(msg.text.trim())
-                    ) && (
-                      <div className={`text-[13.5px] sm:text-[14px] leading-relaxed text-[#fafafa] whitespace-pre-wrap break-words font-sans py-0.5 ${msg.isDeleted ? 'opacity-80' : ''}`} dir="auto">
-                        {renderMessageTextWithMentions(msg.text, { onPhoneClick: openPhoneMenu, highlightQuery: searchQuery })}
-                      </div>
-                    )}
-
-                    {/* التوقيت وعلامات القراءة في زاوية الرسالة تماماً كواتساب */}
-                    <div className="flex items-center justify-end gap-1.5 text-[11px] text-[#a5a5a5] mt-0.5 select-none self-end">
-                      {msg.isEdited && (
-                        <span
-                          className="text-[9.5px] text-amber-300/90 font-medium inline-flex items-center gap-0.5"
-                          title={msg.editedAt ? `تم التعديل: ${new Date(msg.editedAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}` : 'رسالة معدلة'}
-                        >
-                          <Pencil className="w-2.5 h-2.5" />
-                          <span>معدلة</span>
-                        </span>
-                      )}
-                      <span>{msg.timestamp}</span>
-                      {renderMessageStatusTicks(msg, isBoth)}
-                    </div>
-
-                    {/* شارة التفاعلات على زاوية الرسالة نفسها (وليس داخل بطاقة الإجراءات) */}
-                    {renderMessageReactions(msg, isFromMe)}
-                  </div>
-
-                  {/* كبسات الإجراءات تظهر حصراً على الجانب عند تمرير الماوس فوق الرسالة بتصميم عصري فخم */}
-                  <div
-                    className={`max-md:hidden absolute z-30 opacity-0 scale-95 pointer-events-none group-hover:opacity-100 group-hover:scale-100 group-hover:pointer-events-auto transition-all duration-200 md:top-0 ${
-                      isFromMe ? 'md:right-full md:mr-3' : 'md:left-full md:ml-3'
-                    } max-md:bottom-1 max-md:start-2 max-md:end-2 w-[248px] bg-[#111212]/95 backdrop-blur-2xl border border-white/10 hover:border-emerald-500/30 rounded-2xl p-3 shadow-[0_18px_50px_rgba(0,0,0,0.85)] flex flex-col gap-2.5 transition-all`}
-                  >
-                    {/* رأس شريط الإجراءات الجانبي */}
-                    <div className="flex items-center justify-between px-0.5 text-[11px] font-bold border-b border-white/[0.07] pb-2 select-none">
-                      <span className="flex items-center gap-1.5 text-white/90">
-                        <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>إجراءات الحوالة</span>
-                      </span>
-                      <div className="flex items-center gap-1 flex-wrap justify-end">
-                        {effectiveAirtable && (
-                          <span
-                            title="مسجلة في قاعدة بيانات أيرتيبل"
-                            className="bg-blue-500/20 text-blue-300 border border-blue-500/40 px-1.5 py-0.5 rounded-full text-[9.5px] font-extrabold flex items-center gap-1 shadow-xs"
-                          >
-                            <Database className="w-2.5 h-2.5 text-blue-400" />
-                            <span>أيرتيبل</span>
-                          </span>
-                        )}
-
-                        {effectivePortal && (
-                          <span
-                            title="مسجلة في بوابة عقليات"
-                            className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-1.5 py-0.5 rounded-full text-[9.5px] font-extrabold flex items-center gap-1 shadow-xs"
-                          >
-                            <Globe className="w-2.5 h-2.5 text-emerald-400" />
-                            <span>البوابة</span>
-                          </span>
-                        )}
-
-                        {!effectiveAirtable && !effectivePortal && isReceived && (
-                          <span
-                            title="تم استلام الحوالة"
-                            className="bg-purple-500/20 text-purple-300 border border-purple-500/40 px-2 py-0.5 rounded-full text-[10px] font-extrabold flex items-center gap-1 shadow-xs"
-                          >
-                            <CheckCircle2 className="w-3 h-3 text-purple-400 stroke-[2.5]" />
-                            <span>مستلمة</span>
-                          </span>
-                        )}
-
-                        {!effectiveAirtable && !effectivePortal && !isReceived && (
-                          <span className="bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 shadow-xs">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-                            بانتظار الإجراء
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* أزرار التسجيل في أيرتيبل والبوابة (تظهر على أجهزة سطح المكتب فقط كما طلب المستخدم) */}
-                    <div className="hidden md:flex md:flex-col gap-1.5 pt-1">
-                      {/* زر التسجيل الشامل الأساسي - يفتح صفحة البوابة وتعبئة البيانات تلقائياً ويسجل في أيرتيبل */}
-                      <Button
-                        size="sm"
-                        onClick={() => handleDirectFullSubmit(msg)}
-                        disabled={isProcessing}
-                        className={`h-9 text-xs font-bold w-full rounded-xl gap-2 cursor-pointer transition-all duration-200 active:scale-[0.98] ${
-                          isBoth
-                            ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-lg shadow-emerald-950/40 border border-emerald-400/20'
-                            : 'bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-500 hover:to-teal-500 text-white shadow-lg shadow-emerald-950/30 border border-emerald-400/20'
-                        }`}
-                        title={isBoth ? 'انقر لإعادة الاعتماد والتسجيل مجدداً' : 'فتح صفحة البوابة وتعبئة البيانات تلقائياً وحفظ السجل في أيرتيبل'}
-                      >
-                        {isBoth ? <RotateCw className="w-3.5 h-3.5" /> : <Sparkles className="w-3.5 h-3.5" />}
-                        <span>{isBoth ? 'إعادة التسجيل والاعتماد' : 'تسجيل وحفظ شامل'}</span>
-                      </Button>
-
-                      {/* شبكة الأزرار السريعة بتصميم عصري وأنيق */}
-                      <div className="grid grid-cols-2 gap-1.5">
-                        {/* زر تعبئة البوابة */}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleOpenPortalWithAutoFill(msg)}
-                          disabled={isProcessing}
-                          className={`h-8 text-[11px] font-bold px-2 rounded-xl gap-1.5 cursor-pointer transition-all hover:-translate-y-0.5 ${
-                            effectivePortal
-                              ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 shadow-xs'
-                              : 'border-teal-500/35 bg-teal-500/10 text-teal-300 hover:bg-teal-500/20 hover:border-teal-500/50 shadow-xs'
-                          }`}
-                          title="فتح صفحة البوابة وتعبئة الحقول تلقائياً"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5 text-teal-300 shrink-0" />
-                          <span className="truncate">{effectivePortal ? 'إعادة البوابة' : 'البوابة'}</span>
-                        </Button>
-
-                        {/* زر أيرتيبل فقط */}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleDirectAirtableSubmit(msg)}
-                          disabled={isProcessing}
-                          className={`h-8 text-[11px] font-bold px-2 rounded-xl gap-1.5 cursor-pointer transition-all hover:-translate-y-0.5 ${
-                            effectiveAirtable
-                              ? 'border-blue-500/40 bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 shadow-xs'
-                              : 'border-blue-500/35 bg-blue-500/10 text-blue-300 hover:bg-blue-500/20 hover:border-blue-500/50 shadow-xs'
-                          }`}
-                          title="حفظ السجل في قاعدة بيانات أيرتيبل"
-                        >
-                          <Database className="w-3.5 h-3.5 text-blue-300 shrink-0" />
-                          <span className="truncate">{currentStatus.airtable ? 'إعادة أيرتيبل' : 'أيرتيبل'}</span>
-                        </Button>
-
-                        {/* زر إرسال للقروب */}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleSendCredentialsToGroup(msg)}
-                          disabled={isProcessing}
-                          className={`h-8 text-[11px] font-bold px-2 rounded-xl gap-1.5 cursor-pointer transition-all hover:-translate-y-0.5 ${
-                            currentStatus.forwardedTo === 'حوالات تم رفعها'
-                              ? 'border-emerald-500/50 bg-emerald-500/25 text-emerald-300 hover:bg-emerald-500/35 shadow-xs'
-                              : 'border-emerald-500/35 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 hover:border-emerald-500/50 shadow-xs'
-                          }`}
-                          title="إرسال بيانات الدخول إلى مجموعة حوالات تم رفعها"
-                        >
-                          <SendHorizontal className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                          <span className="truncate">للإداريين</span>
-                        </Button>
-
-                        {/* زر تأكيد الاستلام */}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleToggleReceived(msg)}
-                          className={`h-8 text-[11px] font-bold px-2 rounded-xl gap-1.5 cursor-pointer transition-all hover:-translate-y-0.5 ${
-                            isReceived
-                              ? 'border-emerald-500/60 bg-emerald-500/25 text-emerald-300 hover:bg-emerald-500/35 shadow-xs'
-                              : 'border-[#2e2f2f] bg-[#1d1f1f] text-[#a5a5a5] hover:text-white hover:bg-[#242626]'
-                          }`}
-                          title={isReceived ? 'إلغاء وسم الاستلام' : 'تحديد الحوالة بأنها تم استلامها'}
-                        >
-                          <CheckCircle2 className={`w-3.5 h-3.5 shrink-0 ${isReceived ? 'text-emerald-400' : 'text-[#a5a5a5]'}`} />
-                          <span className="truncate">{isReceived ? 'تم الاستلام' : 'استلام'}</span>
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* زر تحويل الحوالة لمجموعات أخرى - يفتح شاشة التحويل الشبيهة بواتساب والقوائم المخصصة */}
-                    <div className="relative w-full">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedMsgIds([msg.id]);
-                          setTargetChatsToForward([]);
-                          setForwardSearchQuery('');
-                          setIsForwardModalOpen(true);
-                        }}
-                        className="h-8 text-[11px] font-bold w-full border-purple-500/35 bg-purple-500/10 text-purple-200 hover:bg-purple-500/20 hover:border-purple-500/50 rounded-xl justify-between px-2.5 cursor-pointer transition-all hover:-translate-y-0.5 shadow-xs"
-                      >
-                        <span className="flex items-center gap-1.5">
-                          <Share2 className="w-3.5 h-3.5 text-purple-300" />
-                          <span>تحويل لمجموعة / قوائم الشغل</span>
-                        </span>
-                        <ChevronDown className="w-3.5 h-3.5 text-purple-300" />
-                      </Button>
-                    </div>
-
-                    {/* شريط الإجراءات السريعة (رد، تفاعل، مراجعة، إخفاء بالعين، فك القفل) */}
-                    <div className="flex items-center justify-between border-t border-white/[0.07] pt-2 px-1">
-                      {/* رد */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          closeAllPopups();
-                          handleStartReply(msg);
-                        }}
-                        className="p-1.5 rounded-lg text-sky-400 hover:bg-sky-500/15 hover:text-sky-300 transition-all cursor-pointer"
-                        title="رد واقتباس (Reply)"
-                      >
-                        <Reply className="w-3.5 h-3.5" />
-                      </button>
-
-                      {/* تفاعل */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const willOpen = reactionPickerMsgId !== msg.id;
-                          closeAllPopups();
-                          if (willOpen) {
-                            setReactionPickerMsgId(msg.id);
-                          }
-                        }}
-                        className="p-1.5 rounded-lg text-amber-400 hover:bg-amber-500/15 hover:text-amber-300 transition-all cursor-pointer"
-                        title="تفاعل (React)"
-                      >
-                        <Smile className="w-3.5 h-3.5" />
-                      </button>
-
-                      {/* مراجعة وتعديل (سطح المكتب فقط) */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          closeAllPopups();
-                          const effReceipt = getEffectiveReceipt(msg);
-                          onOpenReview(parsed, effReceipt?.receiptUrl || msg.mediaUrl || (linkedReceipts[msg.id]?.receiptUrl), msg.id);
-                        }}
-                        className="hidden md:inline-flex p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-500/15 hover:text-emerald-300 transition-all cursor-pointer"
-                        title="مراجعة وتدقيق الحوالة"
-                      >
-                        <FileText className="w-3.5 h-3.5" />
-                      </button>
-
-                      {/* إخفاء / استرجاع الرسالة بإيموجي العين 👁️ */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          closeAllPopups();
-                          handleToggleHideMessage(msg.id);
-                        }}
-                        className={`w-7 h-7 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
-                          hiddenMessageIds.has(msg.id)
-                            ? 'bg-amber-500/25 ring-1 ring-amber-400/60 shadow-xs'
-                            : 'hover:bg-white/10 opacity-70 hover:opacity-100'
-                        }`}
-                        title={hiddenMessageIds.has(msg.id) ? 'استرجاع الرسالة وإظهارها' : 'إخفاء الرسالة من المحادثة'}
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                      </button>
-
-                      {/* فك القفل إن كانت مسجلة */}
-                      {(effectivePortal || effectiveAirtable || isReceived) && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            closeAllPopups();
-                            handleResetMessageStatus(msg.id);
-                          }}
-                          className="p-1.5 rounded-lg text-amber-400 hover:bg-amber-500/15 transition-all cursor-pointer"
-                          title="فك القفل / إعادة تعيين الحالة للتسجيل مجدداً"
-                        >
-                          <RotateCw className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-
-                      {/* فك الشبك إن كان هناك وصل مشبوك */}
-                      {linkedReceipts[msg.id] && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            closeAllPopups();
-                            handleUnlinkReceipt(msg.id);
-                          }}
-                          className="p-1.5 rounded-lg text-rose-400 hover:bg-[#242626] transition-colors cursor-pointer"
-                          title="فك ارتباط صورة الوصل"
-                        >
-                          <Link2 className="w-3.5 h-3.5 line-through" />
-                        </button>
-                      )}
-                    </div>
-
-                    {/* منتقي التفاعل السريع */}
-                    {renderQuickReactionPicker(msg, isFromMe)}
-                  </div>
-                </div>
-              </div>
-              </React.Fragment>
-            );
           })}
         </>
       )}
           {/* مرساة التمرير الدقيقة لآخر رسالة */}
           <div ref={messagesEndRef} className="h-1 shrink-0" />
         </div>
-
-        {/* شريط عائم سفلي لشبك صورة الوصل مع نص الحوالة أو شبك صورتين معاً عند تحديدهما */}
-        {isSelectionMode && canLinkSelected && (
-          <div className="fixed sm:absolute bottom-16 sm:bottom-20 left-1/2 -translate-x-1/2 z-40 max-w-[95vw] bg-[#1d1f1f]/95 border-2 border-[#21c063] shadow-2xl rounded-2xl px-3 sm:px-4 py-2 sm:py-2.5 flex flex-wrap sm:flex-nowrap items-center justify-center gap-2 sm:gap-2.5 animate-in fade-in slide-in-from-bottom-3 backdrop-blur-md">
-            <div className="flex items-center gap-2 text-xs text-[#fafafa]">
-              <span className="w-2 h-2 rounded-full bg-[#21c063] animate-ping" />
-              <span className="font-bold text-emerald-400">
-                {isTwoImagesSelected
-                  ? 'صورتان محددتان (صورة حوالة + وصل)'
-                  : (selectedTextMsgs && selectedTextMsgs.length > 1)
-                  ? `صورة وصل واحدة + (${selectedTextMsgs.length}) حوالات نصية`
-                  : `صورة وصل + حوالة (${getCachedParsedTransfer(selectedTextMsg?.text || '', selectedTextMsg).participantName || 'نص الحوالة'})`}
-              </span>
-            </div>
-
-            <Button
-              size="sm"
-              onClick={handleLinkSelectedMessages}
-              className="h-8 text-xs font-black bg-[#21c063] hover:bg-[#1daa55] text-white px-3.5 rounded-xl shadow-md cursor-pointer gap-1.5"
-            >
-              <Link2 className="w-4 h-4" />
-              <span>
-                {isTwoImagesSelected
-                  ? 'شبك الصورتين معاً'
-                  : (selectedTextMsgs && selectedTextMsgs.length > 1)
-                  ? `شبك الوصل مع (${selectedTextMsgs.length}) حوالات`
-                  : 'شبك الوصل مع الحوالة'}
-              </span>
-            </Button>
-
-            {isTwoImagesSelected && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleMergeSelectedImages}
-                className="h-8 text-xs font-bold border-[#21c063]/50 text-emerald-300 hover:bg-[#21c063]/15 px-3 rounded-xl cursor-pointer gap-1.5"
-                title="دمج الصورتين في ملف صورة موحد عالي الدقة"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                <span>دمج في صورة واحدة</span>
-              </Button>
-            )}
-
-            <button
-              onClick={() => {
-                setIsSelectionMode(false);
-                setSelectedMsgIds([]);
-              }}
-              className="text-[#a5a5a5] hover:text-white p-1 cursor-pointer"
-              title="إلغاء التحديد"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
 
         {/* زر التمرير السريع لآخر رسالة (يظهر عند الصعود للأعلى) */}
         {showScrollBottomBtn && (
@@ -11272,38 +10683,6 @@ export function WhatsAppChatInterface({
                 </div>
               )}
 
-              {/* خيارات التسجيل (لرسائل الحوالات فقط) */}
-              {mobileSheet.isTransfer && (
-                <div className="bg-[#1d1f1f] border border-[#2e2f2f] rounded-2xl p-2 flex flex-col gap-2">
-                  <button
-                    type="button"
-                    onClick={run(handleMobileRegisterBoth)}
-                    className="h-12 rounded-xl bg-gradient-to-l from-emerald-500 to-teal-600 text-white text-sm font-bold flex items-center justify-center gap-2 active:scale-[0.98] transition-transform cursor-pointer"
-                  >
-                    <Sparkles className="w-4 h-4" />
-                    تسجيل شامل (البوابة + أيرتيبل)
-                  </button>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={run(handleOpenPortalWithAutoFill)}
-                      className="h-11 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm font-bold flex items-center justify-center gap-1.5 active:scale-[0.98] cursor-pointer"
-                    >
-                      <Zap className="w-4 h-4" />
-                      البوابة
-                    </button>
-                    <button
-                      type="button"
-                      onClick={run(handleDirectAirtableSubmit)}
-                      className="h-11 rounded-xl bg-sky-500/10 border border-sky-500/30 text-sky-300 text-sm font-bold flex items-center justify-center gap-1.5 active:scale-[0.98] cursor-pointer"
-                    >
-                      <Database className="w-4 h-4" />
-                      أيرتيبل
-                    </button>
-                  </div>
-                </div>
-              )}
-
               {/* الخيارات العامة */}
               <div className="bg-[#1d1f1f] border border-[#2e2f2f] rounded-2xl overflow-hidden flex flex-col">
                 <button type="button" onClick={run(handleStartReply)} className="flex items-center gap-3 px-4 h-12 text-sm text-[#fafafa] active:bg-[#2e2f2f] cursor-pointer">
@@ -11691,21 +11070,6 @@ export function WhatsAppChatInterface({
             )}
           </button>
 
-          {/* خيار فك الشبك في حال كانت الحوالة مشبوكة */}
-          {linkedReceipts[contextMenu.msg.id] && (
-            <button
-              onClick={() => {
-                const id = contextMenu.msg.id;
-                closeAllPopups();
-                handleUnlinkReceipt(id);
-              }}
-              className="w-full text-right px-3.5 py-2 text-[13.5px] font-normal text-[#d1d7db] hover:text-[#e9edef] hover:bg-[#182229] rounded-xl transition-colors flex items-center gap-3 cursor-pointer group"
-            >
-              <Link2 className="w-4 h-4 text-[#8696a0] group-hover:text-[#aebac1] transition-colors shrink-0" />
-              <span>فك شبك صورة الوصل</span>
-            </button>
-          )}
-
           {/* قائمة المجموعات للتحويل السريع */}
           {groupsList.filter((g) => g.name !== activeGroup).length > 0 && (
             <>
@@ -11844,145 +11208,6 @@ export function WhatsAppChatInterface({
             </form>
           </div>
         </div>
-      )}
-
-      {/* نافذة التأكيد الذكية بعد التسجيل في البوابة وإمكانية الإرسال للقروب */}
-      {pendingPortalConfirm && (
-        <Dialog open={true} onOpenChange={(open) => !open && !isSendingPortalCreds && setPendingPortalConfirm(null)}>
-          <DialogContent showCloseButton={false} dir="rtl" className="max-w-md bg-[#161717] border-[#2e2f2f] text-white p-6 rounded-2xl shadow-2xl">
-            <div className="flex items-center justify-between border-b border-[#2e2f2f] pb-4 mb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
-                  <ExternalLink className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-white">تأكيد التسجيل في بوابة عقليات</h3>
-                  <p className="text-xs text-[#a5a5a5]">المتدرب: {pendingPortalConfirm.parsed.participantName}</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => !isSendingPortalCreds && setPendingPortalConfirm(null)}
-                disabled={isSendingPortalCreds}
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-zinc-400 hover:text-white hover:bg-[#242626] transition-colors cursor-pointer disabled:opacity-50"
-                title="إغلاق"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-2 text-xs text-[#e0e0e0] bg-[#202222] p-3.5 rounded-xl border border-[#2e2f2f]/80">
-              <div className="flex justify-between items-center pb-2 border-b border-[#2e2f2f]/60">
-                <span className="text-[#a5a5a5]">اسم المشترك:</span>
-                <span className="font-bold text-white text-sm">{pendingPortalConfirm.parsed.participantName}</span>
-              </div>
-              <div className="flex justify-between items-center pb-1.5 border-b border-[#2e2f2f]/30">
-                <span className="text-[#a5a5a5]">البريد الإلكتروني:</span>
-                <span dir="ltr" className="font-mono text-emerald-400 text-xs font-semibold select-all">{pendingPortalConfirm.parsed.email || 'غير محدد'}</span>
-              </div>
-              <div className="flex justify-between items-center pb-1.5 border-b border-[#2e2f2f]/30">
-                <span className="text-[#a5a5a5]">رقم الجوال:</span>
-                <span dir="ltr" className="font-mono text-emerald-400 text-xs font-semibold select-all">{pendingPortalConfirm.targetPhone}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-[#a5a5a5]">المبلغ والعملة:</span>
-                <span dir="ltr" className="text-white font-bold">{pendingPortalConfirm.parsed.amount || 85} {pendingPortalConfirm.parsed.currency || 'USD'}</span>
-              </div>
-            </div>
-
-            <div className="space-y-1.5 my-3.5">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-[#e0e0e0] flex items-center gap-1.5">
-                  <Pencil className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>نص الرسالة للمجموعة (يمكنك التعديل عليها قبل الإرسال):</span>
-                </label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const defaultCredsMsg = `بيانات البوابة الالكترونية\n\nاسم المشترك :  \n${pendingPortalConfirm.parsed.participantName}\n\nالايميل أو اسم المستخدم:\n${pendingPortalConfirm.parsed.email}\n\nالرقم السري : \n${pendingPortalConfirm.targetPhone}\n\nرابط تسجيل الدخول إلى بوابة التدريبات العقلية:\n\nhttps://portal.aqleeat.com/trainees-portal\n\nرابط شرح استخدام البوابة من اليوتيوب:\n\nhttps://youtu.be/gFRQBtkQceE`;
-                    setPortalConfirmMessage(defaultCredsMsg);
-                  }}
-                  className="text-[11px] text-[#a5a5a5] hover:text-emerald-400 transition-colors flex items-center gap-1 cursor-pointer"
-                  title="استعادة النص الافتراضي"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  <span>استعادة</span>
-                </button>
-              </div>
-              <textarea
-                value={portalConfirmMessage}
-                onChange={(e) => setPortalConfirmMessage(e.target.value)}
-                rows={8}
-                dir="rtl"
-                className="w-full bg-[#1c1d1d] border border-[#2e2f2f] focus:border-emerald-500/60 focus:ring-1 focus:ring-emerald-500/40 rounded-xl p-3 text-xs text-[#e0e0e0] leading-relaxed resize-y outline-none transition-all font-sans"
-                placeholder="اكتب أو عدّل نص الرسالة هنا..."
-              />
-            </div>
-
-            <p className="text-xs text-[#b8b9b9] my-3 leading-relaxed">
-              بعد الضغط على زر <strong className="text-emerald-400">(تسجيل)</strong> في صفحة البوابة، هل تريد إرسال بيانات الدخول الرسمية أعلاه إلى مجموعة <strong className="text-white">"حوالات تم رفعها"</strong> على واتساب الآن؟
-            </p>
-
-            <div className="flex flex-col gap-2 pt-1">
-              <Button
-                disabled={isSendingPortalCreds}
-                onClick={async () => {
-                  if (isSendingPortalCreds) return;
-                  setIsSendingPortalCreds(true);
-                  try {
-                    const targetMsg = pendingPortalConfirm.msg;
-                    await updateStatus(targetMsg.id, { portal: true, registered: true });
-                    await handleSendCredentialsToGroup(targetMsg, portalConfirmMessage);
-                    setPendingPortalConfirm(null);
-                  } catch (err: any) {
-                    toast.error('حدث خطأ أثناء الإرسال: ' + (err?.message || 'خطأ غير معروف'));
-                  } finally {
-                    setIsSendingPortalCreds(false);
-                  }
-                }}
-                className="w-full bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-500 hover:to-teal-500 text-white font-bold py-2.5 rounded-xl gap-2 cursor-pointer shadow-lg shadow-emerald-950/40 border border-emerald-400/20 disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {isSendingPortalCreds ? (
-                  <>
-                    <RotateCw className="w-4 h-4 animate-spin" />
-                    <span>جاري الإرسال للمجموعة...</span>
-                  </>
-                ) : (
-                  <>
-                    <SendHorizontal className="w-4 h-4" />
-                    <span>إرسال إلى مجموعة (حوالات تم رفعها)</span>
-                  </>
-                )}
-              </Button>
-
-              <Button
-                variant="outline"
-                disabled={isSendingPortalCreds}
-                onClick={async () => {
-                  if (isSendingPortalCreds) return;
-                  const targetMsg = pendingPortalConfirm.msg;
-                  await updateStatus(targetMsg.id, { portal: true, registered: true });
-                  toast.success(`تم تأكيد تسجيل المتدرب (${pendingPortalConfirm.parsed.participantName}) في البوابة بنجاح`, 'بوابة عقليات');
-                  setPendingPortalConfirm(null);
-                }}
-                className="w-full border-[#2e2f2f] hover:bg-[#242626] text-[#e0e0e0] font-bold py-2 rounded-xl cursor-pointer gap-2 disabled:opacity-50"
-              >
-                <Check className="w-4 h-4 text-emerald-400" />
-                <span>تم التسجيل في البوابة فقط (بدون إرسال)</span>
-              </Button>
-
-              <Button
-                variant="ghost"
-                disabled={isSendingPortalCreds}
-                onClick={() => !isSendingPortalCreds && setPendingPortalConfirm(null)}
-                className="w-full text-xs text-[#a5a5a5] hover:text-white py-1.5 cursor-pointer gap-1.5 disabled:opacity-50"
-              >
-                <X className="w-3.5 h-3.5" />
-                <span>إلغاء / إغلاق</span>
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
       )}
 
       {/* نافذة تفاصيل التفاعلات على الرسالة كواتساب ويب الحقيقي */}
