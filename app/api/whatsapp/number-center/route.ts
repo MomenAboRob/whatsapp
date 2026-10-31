@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserFromRequest } from '@/lib/auth';
 import { getWhatsAppManager } from '@/lib/whatsapp-client';
-import { addNumberFiles, allocateNumbers, numberCenterSummary, readNumberCenter } from '@/lib/number-center';
+import { addNumberFiles, allocateNumbers, deleteNumberFile, numberCenterSummary, readNumberCenter } from '@/lib/number-center';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,6 +51,10 @@ export async function POST(req: NextRequest) {
   }
   let body: { action?: string; fileId?: string; recipientIds?: unknown; perPerson?: unknown };
   try { body = await req.json(); } catch { return bad('طلب غير صالح'); }
+  if (body.action === 'delete_file') {
+    try { return NextResponse.json({ success: true, deleted: deleteNumberFile(user.id, String(body.fileId || '')) }); }
+    catch (error) { return bad(error instanceof Error ? error.message : 'تعذر حذف الملف'); }
+  }
   if (body.action !== 'allocate') return bad('إجراء غير صالح');
   const ids = body.recipientIds;
   if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) return bad('اختر الأشخاص');

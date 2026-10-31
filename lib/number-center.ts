@@ -3,7 +3,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 
 export type NumberFile = { id: string; name: string; createdAt: string; numbers: string[] };
-export type NumberAllocation = { id: string; fileId: string; personJid: string; personName: string; numbers: string[]; createdAt: string };
+export type NumberAllocation = { id: string; fileId: string; fileName?: string; personJid: string; personName: string; numbers: string[]; createdAt: string };
 export type NumberCenterData = { files: NumberFile[]; allocations: NumberAllocation[] };
 
 const filePath = (userId: string) => path.join(process.cwd(), 'whatsapp_auth', `user_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`, 'number-center.json');
@@ -51,7 +51,7 @@ export function extractNumbers(text: string): string[] {
 
 export function addNumberFiles(userId: string, uploads: Array<{ name: string; text: string }>) {
   const data = readNumberCenter(userId);
-  const existing = new Set(data.files.flatMap((file) => file.numbers));
+  const existing = new Set([...data.files.flatMap((file) => file.numbers), ...data.allocations.flatMap((allocation) => allocation.numbers)]);
   const results = uploads.map(({ name, text }) => {
     const parsed = extractNumbers(text);
     const numbers = parsed.filter((number) => !existing.has(number));
@@ -77,7 +77,7 @@ export function allocateNumbers(userId: string, fileId: string, recipients: Arra
   if (available.length < needed) throw new Error(available.length ? `المتبقي ${available.length} رقم فقط، والمطلوب ${needed}. قلّل العدد أو الأشخاص.` : 'خلصت كل الأرقام الموجودة في هذا الملف');
   const createdAt = new Date().toISOString();
   const allocations = recipients.map((recipient, index): NumberAllocation => ({
-    id: randomUUID(), fileId, personJid: recipient.id, personName: recipient.name,
+    id: randomUUID(), fileId, fileName: file.name, personJid: recipient.id, personName: recipient.name,
     numbers: available.slice(index * perPerson, (index + 1) * perPerson), createdAt,
   }));
   data.allocations.unshift(...allocations);
@@ -85,10 +85,22 @@ export function allocateNumbers(userId: string, fileId: string, recipients: Arra
   return allocations;
 }
 
+export function deleteNumberFile(userId: string, fileId: string) {
+  const data = readNumberCenter(userId);
+  const file = data.files.find((item) => item.id === fileId);
+  if (!file) throw new Error('الملف غير موجود');
+  for (const allocation of data.allocations) {
+    if (allocation.fileId === fileId && !allocation.fileName) allocation.fileName = file.name;
+  }
+  data.files = data.files.filter((item) => item.id !== fileId);
+  saveNumberCenter(userId, data);
+  return { name: file.name, allocated: data.allocations.filter((item) => item.fileId === fileId).length };
+}
+
 export function numberCenterSummary(data: NumberCenterData) {
   const used = new Set(data.allocations.flatMap((allocation) => allocation.numbers));
   return {
     files: data.files.map((file) => ({ id: file.id, name: file.name, createdAt: file.createdAt, total: file.numbers.length, remaining: file.numbers.filter((number) => !used.has(number)).length })),
-    allocations: data.allocations.map((item) => ({ id: item.id, fileId: item.fileId, personJid: item.personJid, personName: item.personName, count: item.numbers.length, createdAt: item.createdAt })),
+    allocations: data.allocations.map((item) => ({ id: item.id, fileId: item.fileId, fileName: item.fileName, personJid: item.personJid, personName: item.personName, count: item.numbers.length, createdAt: item.createdAt })),
   };
 }
