@@ -4,7 +4,8 @@ import { randomUUID } from 'crypto';
 
 export type NumberFile = { id: string; name: string; createdAt: string; numbers: string[] };
 export type NumberAllocation = { id: string; fileId: string; fileName?: string; personJid: string; personName: string; numbers: string[]; createdAt: string };
-export type NumberCenterData = { files: NumberFile[]; allocations: NumberAllocation[] };
+export type NumberBranch = { id: string; name: string; members: Array<{ id: string; name: string }>; createdAt: string };
+export type NumberCenterData = { files: NumberFile[]; allocations: NumberAllocation[]; branches: NumberBranch[] };
 
 const filePath = (userId: string) => path.join(process.cwd(), 'whatsapp_auth', `user_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`, 'number-center.json');
 
@@ -14,8 +15,9 @@ export function readNumberCenter(userId: string): NumberCenterData {
     return {
       files: Array.isArray(value.files) ? value.files : [],
       allocations: Array.isArray(value.allocations) ? value.allocations : [],
+      branches: Array.isArray(value.branches) ? value.branches : [],
     };
-  } catch { return { files: [], allocations: [] }; }
+  } catch { return { files: [], allocations: [], branches: [] }; }
 }
 
 function saveNumberCenter(userId: string, data: NumberCenterData) {
@@ -97,10 +99,62 @@ export function deleteNumberFile(userId: string, fileId: string) {
   return { name: file.name, allocated: data.allocations.filter((item) => item.fileId === fileId).length };
 }
 
+export function createNumberBranch(userId: string, rawName: string) {
+  const name = rawName.trim();
+  if (!name || name.length > 80) throw new Error('اكتب اسم فرع لا يتجاوز 80 حرفًا');
+  const data = readNumberCenter(userId);
+  if (data.branches.some((branch) => branch.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error('اسم الفرع موجود بالفعل');
+  const branch: NumberBranch = { id: randomUUID(), name, members: [], createdAt: new Date().toISOString() };
+  data.branches.unshift(branch);
+  saveNumberCenter(userId, data);
+  return branch;
+}
+
+export function renameNumberBranch(userId: string, branchId: string, rawName: string) {
+  const name = rawName.trim();
+  if (!name || name.length > 80) throw new Error('اكتب اسم فرع لا يتجاوز 80 حرفًا');
+  const data = readNumberCenter(userId);
+  const branch = data.branches.find((item) => item.id === branchId);
+  if (!branch) throw new Error('الفرع غير موجود');
+  if (data.branches.some((item) => item.id !== branchId && item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error('اسم الفرع موجود بالفعل');
+  branch.name = name;
+  saveNumberCenter(userId, data);
+  return branch;
+}
+
+export function addNumberBranchMember(userId: string, branchId: string, member: { id: string; name: string }) {
+  const data = readNumberCenter(userId);
+  const branch = data.branches.find((item) => item.id === branchId);
+  if (!branch) throw new Error('الفرع غير موجود');
+  if (branch.members.some((item) => item.id === member.id)) throw new Error('الشخص موجود في هذا الفرع');
+  if (branch.members.length >= 100) throw new Error('الحد الأقصى 100 شخص لكل فرع');
+  branch.members.push(member);
+  saveNumberCenter(userId, data);
+  return branch;
+}
+
+export function removeNumberBranchMember(userId: string, branchId: string, memberId: string) {
+  const data = readNumberCenter(userId);
+  const branch = data.branches.find((item) => item.id === branchId);
+  if (!branch) throw new Error('الفرع غير موجود');
+  if (!branch.members.some((item) => item.id === memberId)) throw new Error('الشخص غير موجود في هذا الفرع');
+  branch.members = branch.members.filter((item) => item.id !== memberId);
+  saveNumberCenter(userId, data);
+  return branch;
+}
+
+export function deleteNumberBranch(userId: string, branchId: string) {
+  const data = readNumberCenter(userId);
+  if (!data.branches.some((item) => item.id === branchId)) throw new Error('الفرع غير موجود');
+  data.branches = data.branches.filter((item) => item.id !== branchId);
+  saveNumberCenter(userId, data);
+}
+
 export function numberCenterSummary(data: NumberCenterData) {
   const used = new Set(data.allocations.flatMap((allocation) => allocation.numbers));
   return {
     files: data.files.map((file) => ({ id: file.id, name: file.name, createdAt: file.createdAt, total: file.numbers.length, remaining: file.numbers.filter((number) => !used.has(number)).length })),
     allocations: data.allocations.map((item) => ({ id: item.id, fileId: item.fileId, fileName: item.fileName, personJid: item.personJid, personName: item.personName, count: item.numbers.length, createdAt: item.createdAt })),
+    branches: data.branches.map((branch) => ({ id: branch.id, name: branch.name, members: branch.members, createdAt: branch.createdAt })),
   };
 }

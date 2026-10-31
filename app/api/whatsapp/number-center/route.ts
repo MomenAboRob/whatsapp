@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserFromRequest } from '@/lib/auth';
 import { getWhatsAppManager } from '@/lib/whatsapp-client';
-import { addNumberFiles, allocateNumbers, deleteNumberFile, numberCenterSummary, readNumberCenter } from '@/lib/number-center';
+import { addNumberBranchMember, addNumberFiles, allocateNumbers, createNumberBranch, deleteNumberBranch, deleteNumberFile, numberCenterSummary, readNumberCenter, removeNumberBranchMember, renameNumberBranch } from '@/lib/number-center';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -49,20 +49,32 @@ export async function POST(req: NextRequest) {
     try { return NextResponse.json({ success: true, uploaded: addNumberFiles(user.id, uploads) }); }
     catch (error) { return bad(error instanceof Error ? error.message : 'تعذر قراءة الملفات'); }
   }
-  let body: { action?: string; fileId?: string; recipientIds?: unknown; perPerson?: unknown };
+  let body: { action?: string; fileId?: string; branchId?: string; name?: string; memberId?: string; recipientIds?: unknown; perPerson?: unknown };
   try { body = await req.json(); } catch { return bad('طلب غير صالح'); }
   if (body.action === 'delete_file') {
     try { return NextResponse.json({ success: true, deleted: deleteNumberFile(user.id, String(body.fileId || '')) }); }
     catch (error) { return bad(error instanceof Error ? error.message : 'تعذر حذف الملف'); }
   }
+  if (body.action === 'create_branch' || body.action === 'rename_branch' || body.action === 'remove_branch_member' || body.action === 'delete_branch') {
+    try {
+      const branch = body.action === 'create_branch' ? createNumberBranch(user.id, String(body.name || ''))
+        : body.action === 'rename_branch' ? renameNumberBranch(user.id, String(body.branchId || ''), String(body.name || ''))
+        : body.action === 'remove_branch_member' ? removeNumberBranchMember(user.id, String(body.branchId || ''), String(body.memberId || ''))
+        : deleteNumberBranch(user.id, String(body.branchId || ''));
+      return NextResponse.json({ success: true, branch });
+    } catch (error) { return bad(error instanceof Error ? error.message : 'تعذر تعديل الفرع'); }
+  }
+  if (body.action === 'add_branch_member') {
+    const memberId = String(body.memberId || '');
+    const contact = getWhatsAppManager(req).getUserGroups().find((chat) => chat.id === memberId && chat.name && /@(s\.whatsapp\.net|lid)$/.test(chat.id));
+    if (!contact) return bad('الشخص غير موجود في جهات الاتصال');
+    try { return NextResponse.json({ success: true, branch: addNumberBranchMember(user.id, String(body.branchId || ''), { id: contact.id, name: contact.name }) }); }
+    catch (error) { return bad(error instanceof Error ? error.message : 'تعذر إضافة الشخص'); }
+  }
   if (body.action !== 'allocate') return bad('إجراء غير صالح');
-  const ids = body.recipientIds;
-  if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) return bad('اختر الأشخاص');
-  const known = new Map(getWhatsAppManager(req).getUserGroups()
-    .filter((chat) => chat.name && /@(s\.whatsapp\.net|lid)$/.test(chat.id))
-    .map((chat) => [chat.id, chat.name]));
-  const recipients = ids.map((id) => ({ id, name: known.get(id) || '' }));
-  if (recipients.some((item) => !item.name)) return bad('أحد الأشخاص المختارين غير موجود في جهات الاتصال');
+  const branch = readNumberCenter(user.id).branches.find((item) => item.id === body.branchId);
+  if (!branch) return bad('اختر فرعًا محفوظًا أولًا');
+  const recipients = branch.members;
   try {
     const allocations = allocateNumbers(user.id, String(body.fileId || ''), recipients, Number(body.perPerson));
     return NextResponse.json({ success: true, allocations: allocations.map((item) => ({ id: item.id, personName: item.personName, count: item.numbers.length })) });
