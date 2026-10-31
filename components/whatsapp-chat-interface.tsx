@@ -8159,7 +8159,7 @@ export function WhatsAppChatInterface({
   };
 
   return (
-    <div className="w-full h-full bg-[#161717] flex flex-col md:flex-row font-sans select-none overflow-hidden" dir="ltr">
+    <div className="whatsapp-mobile-type w-full h-full bg-[#161717] flex flex-col md:flex-row font-sans select-none overflow-hidden" dir="ltr">
       {/* القائمة الجانبية للمحادثات (شريط واتساب الجانبي الممتد عمودياً بالكامل) */}
       <div className={`${isPopoutMode ? 'hidden' : activeGroup ? 'hidden md:flex' : 'flex'} w-full md:w-80 lg:w-[380px] bg-[#161717] border-r border-[#2e2f2f] flex-col shrink-0 h-full`}>
         {/* رأس الشريط الجانبي مع حالة الاتصال الحية المباشرة */}
