@@ -1230,6 +1230,23 @@ export function WhatsAppChatInterface({
   const [pendingMentions, setPendingMentions] = useState<{ name: string; jid: string }[]>([]);
   const [isSendingMsg, setIsSendingMsg] = useState<boolean>(false);
   const [chatFilterTab, setChatFilterTab] = useState<string>('all');
+  const [isChatFilterMenuOpen, setIsChatFilterMenuOpen] = useState(false);
+  const chatFilterMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isChatFilterMenuOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!chatFilterMenuRef.current?.contains(event.target as Node)) setIsChatFilterMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsChatFilterMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [isChatFilterMenuOpen]);
   const [visibleChatCount, setVisibleChatCount] = useState(80);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [hideReadMessages, setHideReadMessages] = useState<boolean>(false);
@@ -7853,7 +7870,8 @@ export function WhatsAppChatInterface({
         if ((g.unread || 0) === 0) return false;
       }
       if (chatFilterTab === 'favorites') {
-        const isFav = favoriteChatKeys.has(chatKey) || favoriteChatKeys.has(g.name);
+        const savedFavorites = customLists['المفضلة'] || [];
+        const isFav = favoriteChatKeys.has(chatKey) || favoriteChatKeys.has(g.name) || savedFavorites.includes(chatKey) || savedFavorites.includes(g.name);
         if (!isFav) return false;
       }
       if (chatFilterTab.startsWith('list:')) {
@@ -7884,6 +7902,21 @@ export function WhatsAppChatInterface({
         : archivedChatKeys.has(chatKey) || archivedChatKeys.has(g.name);
     }).length;
   }, [groupsList, archivedChatKeys]);
+  const chatFilterCounts = useMemo(() => {
+    const activeChats = groupsList.filter((g) => {
+      const key = g.id || g.name;
+      return typeof g.archived === 'boolean' ? !g.archived : !archivedChatKeys.has(key) && !archivedChatKeys.has(g.name);
+    });
+    const savedFavorites = customLists['المفضلة'] || [];
+    return {
+      unread: activeChats.filter((g) => (g.unread || 0) > 0).length,
+      groups: activeChats.filter((g) => g.isGroup).length,
+      favorites: activeChats.filter((g) => {
+        const key = g.id || g.name;
+        return favoriteChatKeys.has(key) || favoriteChatKeys.has(g.name) || savedFavorites.includes(key) || savedFavorites.includes(g.name);
+      }).length,
+    };
+  }, [groupsList, archivedChatKeys, favoriteChatKeys, customLists]);
 
   // دالة عرض فقاعة ألبوم الصور المجمعة بنظام واتساب الأصلي (2x2 grid أو قسمين أو 3 أقسام)
   const renderAlbumMessage = (item: { msgs: any[]; id: string; index: number }, itemIdx: number) => {
@@ -8269,110 +8302,27 @@ export function WhatsAppChatInterface({
           </Button>
         </div>
 
-        {/* أزرار تصفية وقوائم المحادثات (مطابقة لنظام قوائم واتساب الأصلية) */}
-        <div className="px-2.5 py-1.5 flex items-center gap-1.5 border-b border-[#2e2f2f] bg-[#161717] shrink-0 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <button
-            type="button"
-            onClick={() => setChatFilterTab('all')}
-            className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
-              chatFilterTab === 'all'
-                ? 'bg-[#21c063] text-white shadow-xs'
-                : 'text-[#a5a5a5] hover:text-[#fafafa] hover:bg-[#242626]'
-            }`}
-          >
-            الكل
-          </button>
-          <button
-            type="button"
-            onClick={() => setChatFilterTab('unread')}
-            className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
-              chatFilterTab === 'unread'
-                ? 'bg-[#21c063] text-white shadow-xs'
-                : 'text-[#a5a5a5] hover:text-[#fafafa] hover:bg-[#242626]'
-            }`}
-          >
-            غير مقروءة {groupsList.filter((g) => (g.unread || 0) > 0).length > 0 && `(${groupsList.filter((g) => (g.unread || 0) > 0).length})`}
-          </button>
-          <button
-            type="button"
-            onClick={() => setChatFilterTab('favorites')}
-            className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
-              chatFilterTab === 'favorites'
-                ? 'bg-[#21c063] text-white shadow-xs'
-                : 'text-[#a5a5a5] hover:text-[#fafafa] hover:bg-[#242626]'
-            }`}
-          >
-            المفضلة {favoriteChatKeys.size > 0 && `(${favoriteChatKeys.size})`}
-          </button>
-          <button
-            type="button"
-            onClick={() => setChatFilterTab('groups')}
-            className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
-              chatFilterTab === 'groups'
-                ? 'bg-[#21c063] text-white shadow-xs'
-                : 'text-[#a5a5a5] hover:text-[#fafafa] hover:bg-[#242626]'
-            }`}
-          >
-            المجموعات
-          </button>
-          <button
-            type="button"
-            onClick={() => setChatFilterTab('direct')}
-            className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
-              chatFilterTab === 'direct'
-                ? 'bg-[#21c063] text-white shadow-xs'
-                : 'text-[#a5a5a5] hover:text-[#fafafa] hover:bg-[#242626]'
-            }`}
-          >
-            خاصة
-          </button>
-
-          {/* القوائم المخصصة الديناميكية التي أنشأها المستخدم كواتساب */}
-          {Object.keys(customLists).map((listName) => {
-            const count = (customLists[listName] || []).length;
-            const isSelected = chatFilterTab === `list:${listName}`;
-            return (
-              <button
-                key={listName}
-                type="button"
-                onClick={() => setChatFilterTab(isSelected ? 'all' : `list:${listName}`)}
-                className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-1 ${
-                  isSelected
-                    ? 'bg-[#21c063] text-white shadow-xs'
-                    : 'text-[#a5a5a5] hover:text-[#fafafa] hover:bg-[#242626]'
-                }`}
-              >
-                <span>{listName}</span>
-                {count > 0 && <span className="text-[10px] opacity-80">({count})</span>}
-              </button>
-            );
-          })}
-
-          {/* زر إضافة قائمة جديدة (+) */}
-          <button
-            type="button"
-            onClick={handleCreateNewList}
-            className="p-1.5 rounded-full text-[#a5a5a5] hover:text-white hover:bg-[#242626] transition-colors cursor-pointer shrink-0"
-            title="إنشاء قائمة مخصصة جديدة"
-          >
-            <Plus className="w-3.5 h-3.5" />
-          </button>
-
-          {/* تبويب المؤرشفة (متاح دائماً لتسهيل الوصول للأرشيف كواتساب تماماً) */}
-          <button
-            type="button"
-            onClick={() => setChatFilterTab(chatFilterTab === 'archived' ? 'all' : 'archived')}
-            className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-1 shrink-0 ${
-              chatFilterTab === 'archived'
-                ? 'bg-amber-600 text-white shadow-xs'
-                : 'text-amber-400 hover:text-amber-300 hover:bg-[#242626]'
-            }`}
-            title="عرض المحادثات المؤرشفة"
-          >
-            <Archive className="w-3.5 h-3.5" />
-            <span>المؤرشفة</span>
-            {archivedCount > 0 && <span className="text-[10px]">({archivedCount})</span>}
-          </button>
+        {/* فلاتر المحادثات: الكل، القوائم المخصصة، غير المقروءة، ثم بقية الفلاتر */}
+        <div ref={chatFilterMenuRef} className="relative flex shrink-0 items-center gap-1.5 border-b border-[#2e2f2f] bg-[#161717] px-2.5 py-1.5">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <button type="button" onClick={() => setChatFilterTab('all')} aria-pressed={chatFilterTab === 'all'} className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#21c063] ${chatFilterTab === 'all' ? 'border-[#21c063] bg-[#21c063] text-[#071d11]' : 'border-[#303633] text-[#a5a5a5] hover:bg-[#242626] hover:text-white'}`}>الكل</button>
+            {Object.keys(customLists).filter((name) => name !== 'المفضلة').map((listName) => {
+              const count = (customLists[listName] || []).length;
+              const selected = chatFilterTab === `list:${listName}`;
+              return <button key={listName} type="button" onClick={() => setChatFilterTab(selected ? 'all' : `list:${listName}`)} aria-pressed={selected} className={`flex shrink-0 items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#21c063] ${selected ? 'border-[#21c063] bg-[#21c063] text-[#071d11]' : 'border-[#303633] text-[#a5a5a5] hover:bg-[#242626] hover:text-white'}`}><span>{listName}</span>{count > 0 && <span className="opacity-80">{count}</span>}</button>;
+            })}
+            <button type="button" onClick={() => setChatFilterTab('unread')} aria-pressed={chatFilterTab === 'unread'} className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#21c063] ${chatFilterTab === 'unread' ? 'border-[#21c063] bg-[#21c063] text-[#071d11]' : 'border-[#303633] text-[#a5a5a5] hover:bg-[#242626] hover:text-white'}`}>غير مقروءة {chatFilterCounts.unread || ''}</button>
+            {['favorites', 'groups', 'direct', 'archived'].includes(chatFilterTab) && <button type="button" onClick={() => setChatFilterTab('all')} aria-pressed="true" title="إلغاء الفلتر" className="shrink-0 rounded-full border border-[#21c063] bg-[#21c063] px-3 py-1.5 text-xs font-semibold text-[#071d11] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#21c063]">{{ favorites: 'المفضلة', groups: 'المجموعات', direct: 'خاصة', archived: 'المؤرشفة' }[chatFilterTab]}</button>}
+          </div>
+          <button type="button" onClick={() => setIsChatFilterMenuOpen((open) => !open)} aria-label="فلاتر وقوائم إضافية" aria-expanded={isChatFilterMenuOpen} aria-haspopup="menu" className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#21c063] ${isChatFilterMenuOpen || ['favorites', 'groups', 'direct', 'archived'].includes(chatFilterTab) ? 'bg-[#254d38] text-[#21c063]' : 'bg-[#242626] text-[#a5a5a5] hover:bg-[#303633] hover:text-white'}`}><ChevronDown className="h-4 w-4" /></button>
+          {isChatFilterMenuOpen && <div role="menu" dir="rtl" className="absolute right-2 top-[calc(100%-1px)] z-50 w-56 overflow-hidden rounded-xl border border-[#333c37] bg-[#242626] py-1.5 text-sm text-[#e9edef] shadow-xl">
+            <button role="menuitem" type="button" onClick={() => { setChatFilterTab('favorites'); setIsChatFilterMenuOpen(false); }} className={`flex w-full items-center justify-between px-3.5 py-2.5 text-right hover:bg-[#343938] ${chatFilterTab === 'favorites' ? 'text-[#21c063]' : ''}`}><span>المفضلة</span><span className="text-xs text-[#a5a5a5]">{chatFilterCounts.favorites || ''}</span></button>
+            <button role="menuitem" type="button" onClick={() => { setChatFilterTab('groups'); setIsChatFilterMenuOpen(false); }} className={`flex w-full items-center justify-between px-3.5 py-2.5 text-right hover:bg-[#343938] ${chatFilterTab === 'groups' ? 'text-[#21c063]' : ''}`}><span>المجموعات</span><span className="text-xs text-[#a5a5a5]">{chatFilterCounts.groups}</span></button>
+            <button role="menuitem" type="button" onClick={() => { setChatFilterTab('direct'); setIsChatFilterMenuOpen(false); }} className={`flex w-full items-center justify-between px-3.5 py-2.5 text-right hover:bg-[#343938] ${chatFilterTab === 'direct' ? 'text-[#21c063]' : ''}`}><span>المحادثات الخاصة</span></button>
+            <button role="menuitem" type="button" onClick={() => { setChatFilterTab('archived'); setIsChatFilterMenuOpen(false); }} className={`flex w-full items-center justify-between px-3.5 py-2.5 text-right hover:bg-[#343938] ${chatFilterTab === 'archived' ? 'text-[#21c063]' : ''}`}><span>المؤرشفة</span><span className="text-xs text-[#a5a5a5]">{archivedCount || ''}</span></button>
+            <div className="my-1 border-t border-[#3a403d]" />
+            <button role="menuitem" type="button" onClick={() => { setIsChatFilterMenuOpen(false); handleCreateNewList(); }} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-right hover:bg-[#343938]"><Plus className="h-4 w-4" /><span>قائمة جديدة</span></button>
+          </div>}
         </div>
 
         {/* قائمة المجموعات والمحادثات الممتدة كامل الارتفاع */}
