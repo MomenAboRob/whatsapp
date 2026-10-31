@@ -212,7 +212,7 @@ export function PhoneAccessModal({ isOpen, onClose }: PhoneAccessModalProps) {
               1. كمبيوترك يعمل كسيرفر طالما أنه شغال ومتصل بالإنترنت.
             </p>
             <p>
-              2. رابط الجوال محفوظ أيضاً على سطح المكتب في ملف: <strong>رابط_الجوال_للنظام.txt</strong>.
+              2. افتح Tailscale على الهاتف بنفس حساب الكمبيوتر، ثم انسخ الرابط من هذه الشاشة أو امسح رمز QR.
             </p>
           </div>
         </div>

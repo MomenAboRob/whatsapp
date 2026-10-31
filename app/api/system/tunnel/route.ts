@@ -15,11 +15,10 @@ function tailscaleAccess(): { url: string; mode: 'funnel' | 'tailscale' } | null
     })) as { Web?: Record<string, { Handlers?: Record<string, { Proxy?: string }> }>; AllowFunnel?: Record<string, boolean> };
     const match = Object.entries(config.Web || {}).find(([name, entry]) =>
       /^[a-z0-9.-]+\.ts\.net:443$/i.test(name) &&
-      (entry.Handlers?.['/']?.Proxy === 'http://127.0.0.1:3011' || entry.Handlers?.['/']?.Proxy === 'http://127.0.0.1:3010'));
+      /^http:\/\/(?:127\.0\.0\.1|localhost):3006\/?$/.test(entry.Handlers?.['/']?.Proxy || ''));
     if (!match) return null;
-    const [host, entry] = match;
-    const isPublic = config.AllowFunnel?.[host] === true && entry.Handlers?.['/']?.Proxy === 'http://127.0.0.1:3011';
-    if (config.AllowFunnel?.[host] && !isPublic) return null;
+    const [host] = match;
+    const isPublic = config.AllowFunnel?.[host] === true;
     return { url: `https://${host.replace(/:443$/, '')}`, mode: isPublic ? 'funnel' : 'tailscale' };
   } catch { return null; }
 }

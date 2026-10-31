@@ -593,7 +593,7 @@ export function SystemSettingsModal({
                 </div>
                 <div className="flex justify-between py-1 border-b border-[#242626]">
                   <span>المنفذ المحلي:</span>
-                  <span className="text-white font-mono">Port 3010</span>
+                  <span className="text-white font-mono">Port 3006</span>
                 </div>
                 <div className="flex justify-between py-1">
                   <span>حالة النظام:</span>
