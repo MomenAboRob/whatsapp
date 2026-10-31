@@ -47,8 +47,7 @@ export async function POST(req: NextRequest) {
 
     const isHttps =
       req.headers.get('x-forwarded-proto') === 'https' ||
-      req.nextUrl.protocol === 'https:' ||
-      process.env.NODE_ENV === 'production';
+      req.nextUrl.protocol === 'https:';
 
     // تعيين الكوكي الآمن للجلسة (صالحة لمدة 30 يوماً)
     response.cookies.set({
