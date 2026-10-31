@@ -26,11 +26,13 @@ import {
   Layers,
   ArrowRight,
   HardDrive,
+  Bell,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/floating-toast';
 import { DriveBackupSettings } from '@/components/drive-backup-settings';
+import { WorkspaceNotificationSettings } from '@/components/workspace-notification-settings';
 
 export interface SystemSettingsModalProps {
   isOpen: boolean;
@@ -47,7 +49,7 @@ export interface SystemSettingsModalProps {
   onOpenDashboard?: () => void;
   onRefreshBudget?: () => void;
   onLogout: () => void;
-  initialTab?: 'whatsapp' | 'drive' | 'mobile' | 'extension' | 'airtable' | 'account';
+  initialTab?: 'whatsapp' | 'drive' | 'mobile' | 'notifications' | 'account';
 }
 
 export function SystemSettingsModal({
@@ -62,7 +64,7 @@ export function SystemSettingsModal({
   onLogout,
   initialTab = 'whatsapp',
 }: SystemSettingsModalProps) {
-  const [activeTab, setActiveTab] = useState<'whatsapp' | 'drive' | 'mobile' | 'extension' | 'airtable' | 'account'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'whatsapp' | 'drive' | 'mobile' | 'notifications' | 'account'>(initialTab);
   const tabTrailRef = useRef<Array<typeof activeTab>>([]);
   const lastTabRef = useRef(activeTab);
   const restoringTabRef = useRef(false);
@@ -260,6 +262,15 @@ export function SystemSettingsModal({
 
               <button
                 type="button"
+                onClick={() => setActiveTab('notifications')}
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${activeTab === 'notifications' ? 'bg-[#21c063] text-white' : 'text-[#a5a5a5] hover:text-white hover:bg-[#1f2020]'}`}
+              >
+                <Bell className="w-4 h-4 shrink-0" />
+                <span>المنشنات والإيميل</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setActiveTab('mobile')}
                 className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
                   activeTab === 'mobile'
@@ -272,36 +283,6 @@ export function SystemSettingsModal({
                   <span>رابط الجوال</span>
                 </div>
                 {tunnelUrl && <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveTab('extension')}
-                className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
-                  activeTab === 'extension'
-                    ? 'bg-[#21c063] text-white shadow-xs'
-                    : 'text-[#a5a5a5] hover:text-white hover:bg-[#1f2020]'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <Puzzle className="w-4 h-4 shrink-0" />
-                  <span>إضافة عقليات</span>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveTab('airtable')}
-                className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
-                  activeTab === 'airtable'
-                    ? 'bg-[#21c063] text-white shadow-xs'
-                    : 'text-[#a5a5a5] hover:text-white hover:bg-[#1f2020]'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <Database className="w-4 h-4 shrink-0" />
-                  <span>أيرتيبل والميزانية</span>
-                </div>
               </button>
 
               <button
@@ -354,17 +335,15 @@ export function SystemSettingsModal({
               <h2 className="text-base font-bold text-white">
                 {activeTab === 'whatsapp' && 'إعدادات وحالة اتصال واتساب'}
                 {activeTab === 'drive' && 'نسخ المحادثات إلى Google Drive'}
+                {activeTab === 'notifications' && 'إشعارات المنشنات وربط الإيميل'}
                 {activeTab === 'mobile' && 'رابط الوصول من الجوال (عن بُعد)'}
-                {activeTab === 'extension' && 'إضافة كروم المساعدة لبوابة عقليات'}
-                {activeTab === 'airtable' && 'الميزانية العامة الحية وقاعدة أيرتيبل'}
                 {activeTab === 'account' && 'إعدادات الحساب والجلسة'}
               </h2>
               <p className="text-xs text-[#a5a5a5] mt-0.5">
                 {activeTab === 'whatsapp' && 'إدارة الجلسة الحالية ومزامنة المحادثات وتبديل الرقم'}
-                {activeTab === 'drive' && 'ربط الحساب والنسخ والاسترجاع داخل تطبيق الحوالات'}
+                {activeTab === 'drive' && 'ربط الحساب والنسخ والاسترجاع داخل التطبيق'}
+                {activeTab === 'notifications' && 'اختر الإشعارات وربط حساب الإرسال البريدي'}
                 {activeTab === 'mobile' && 'فتح النظام وإدارته بالكامل من الهاتف الذكي'}
-                {activeTab === 'extension' && 'تحميل الإضافة وربط متصفحك مباشرة بالبوابة'}
-                {activeTab === 'airtable' && 'متابعة الرصيد والمقبوضات والمدفوعات الحية'}
                 {activeTab === 'account' && 'معلومات المستخدم الحالي والأمان وتسجيل الخروج'}
               </p>
             </div>
@@ -401,7 +380,7 @@ export function SystemSettingsModal({
                   <div>
                     <div className="flex items-center gap-2">
                       <h4 className="text-sm font-bold text-white">
-                        {waStatus?.user?.name || 'واتساب الحوالات'}
+                        {waStatus?.user?.name || 'واتساب'}
                       </h4>
                       {waStatus?.status === 'CONNECTED' ? (
                         <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/40 text-[10px]">
@@ -512,12 +491,13 @@ export function SystemSettingsModal({
                 </span>
               </div>
               <p className="text-[11px] leading-relaxed text-[#a5a5a5]">
-                حالة الأرشفة تتحدث عند وصولها من واتساب. القوائم الشخصية التي أنشأتها داخل واتساب لا يرسلها الربط الحالي للتطبيق؛ القوائم الظاهرة هنا تُدار داخل تطبيق الحوالات.
+                حالة الأرشفة تتحدث عند وصولها من واتساب. القوائم الشخصية التي أنشأتها داخل واتساب لا يرسلها الربط الحالي للتطبيق؛ القوائم الظاهرة هنا تُدار داخل التطبيق.
               </p>
             </div>
           )}
 
           {activeTab === 'drive' && <DriveBackupSettings />}
+          {activeTab === 'notifications' && <WorkspaceNotificationSettings />}
 
           {/* 2. تبويب رابط الجوال */}
           {activeTab === 'mobile' && (
@@ -579,99 +559,6 @@ export function SystemSettingsModal({
             </div>
           )}
 
-          {/* 3. تبويب إضافة عقليات */}
-          {activeTab === 'extension' && (
-            <div className="flex flex-col gap-5">
-              <div className="p-4 rounded-2xl bg-[#1c1d1d] border border-[#2e2f2f] flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div className="flex items-center gap-3.5">
-                  <div className="w-12 h-12 rounded-2xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-400 flex items-center justify-center shrink-0">
-                    <Puzzle className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-white">إضافة متصفح كروم لبوابة عقليات</h4>
-                    <p className="text-xs text-[#a5a5a5] mt-1">
-                      إضافة جاهزة للتركيب تتيح قراءة واعتماد الحوالات آلياً داخل بوابة عقليات بنقرة واحدة.
-                    </p>
-                  </div>
-                </div>
-
-                <a
-                  href="/aqleeat-extension.zip"
-                  download="aqleeat-extension.zip"
-                  className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer shrink-0 shadow-xs"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>تحميل الإضافة (ZIP)</span>
-                </a>
-              </div>
-
-              {/* خطوات التثبيت */}
-              <div className="p-4 rounded-2xl bg-[#161717] border border-[#2e2f2f] flex flex-col gap-3">
-                <h5 className="text-xs font-bold text-white flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-[#242626] text-[#21c063] flex items-center justify-center text-[11px] font-bold">1</span>
-                  <span>طريقة التثبيت على متصفح Chrome أو Edge:</span>
-                </h5>
-                <ol className="text-xs text-[#a5a5a5] space-y-2 pr-6 list-decimal leading-relaxed">
-                  <li>قم بتحميل ملف الإضافة المضغوط بالنقر على الزر أعلاه وفك ضغطه في مجلد على جهازك.</li>
-                  <li>افتح متصفح كروم واذهب إلى الرابط: <code className="bg-[#242626] text-cyan-300 px-1.5 py-0.5 rounded text-[11px] font-mono dir-ltr inline-block">chrome://extensions</code></li>
-                  <li>فعّل خيار <strong className="text-white">وضع مطوّر البرامج (Developer Mode)</strong> في أعلى الزاوية.</li>
-                  <li>انقر على زر <strong className="text-white">تحميل إضافة غير محزومة (Load Unpacked)</strong> واختر المجلد المفكوك.</li>
-                </ol>
-              </div>
-            </div>
-          )}
-
-          {/* 4. تبويب أيرتيبل والميزانية */}
-          {activeTab === 'airtable' && (
-            <div className="flex flex-col gap-5">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="p-4 rounded-2xl bg-[#1c1d1d] border border-[#2e2f2f] flex flex-col gap-1">
-                  <span className="text-[11px] text-[#a5a5a5]">المتبقي للشركة</span>
-                  <span className="text-lg font-bold text-emerald-400 font-mono">
-                    {budget ? `${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2 }).format(budget.companyRemaining)} JOD` : 'غير متاح'}
-                  </span>
-                </div>
-                <div className="p-4 rounded-2xl bg-[#1c1d1d] border border-[#2e2f2f] flex flex-col gap-1">
-                  <span className="text-[11px] text-[#a5a5a5]">إجمالي المستلم</span>
-                  <span className="text-lg font-bold text-blue-400 font-mono">
-                    {budget ? `${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2 }).format(budget.totalReceived)} JOD` : 'غير متاح'}
-                  </span>
-                </div>
-                <div className="p-4 rounded-2xl bg-[#1c1d1d] border border-[#2e2f2f] flex flex-col gap-1">
-                  <span className="text-[11px] text-[#a5a5a5]">إجمالي المدفوع</span>
-                  <span className="text-lg font-bold text-rose-400 font-mono">
-                    {budget ? `${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2 }).format(budget.totalPaid)} JOD` : 'غير متاح'}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3">
-                {onOpenDashboard && (
-                  <Button
-                    onClick={() => {
-                      onClose();
-                      onOpenDashboard();
-                    }}
-                    className="bg-[#21c063] hover:bg-[#1daa55] text-white rounded-xl text-xs font-bold gap-2 cursor-pointer"
-                  >
-                    <Database className="w-4 h-4" />
-                    <span>فتح لوحة التحكم وأيرتيبل بالكامل</span>
-                  </Button>
-                )}
-                {onRefreshBudget && (
-                  <Button
-                    variant="outline"
-                    onClick={onRefreshBudget}
-                    className="border-[#2e2f2f] hover:bg-[#242626] text-white rounded-xl text-xs font-bold gap-2 cursor-pointer"
-                  >
-                    <RotateCw className="w-4 h-4" />
-                    <span>تحديث الأرقام الآن</span>
-                  </Button>
-                )}
-              </div>
-            </div>
-          )}
-
           {/* 5. تبويب الحساب والجلسة */}
           {activeTab === 'account' && (
             <div className="flex flex-col gap-5">
@@ -682,7 +569,7 @@ export function SystemSettingsModal({
                   </div>
                   <div>
                     <h4 className="text-sm font-bold text-white">{currentUser?.name || 'مستخدم النظام'}</h4>
-                    <p className="text-xs text-[#a5a5a5] mt-0.5">{currentUser?.email || 'admin@hawalat.app'}</p>
+                    <p className="text-xs text-[#a5a5a5] mt-0.5">{currentUser?.email || '—'}</p>
                     <Badge className="bg-[#21c063]/20 text-[#21c063] border-[#21c063]/30 text-[10px] mt-1.5">
                       مسؤول معتمد
                     </Badge>

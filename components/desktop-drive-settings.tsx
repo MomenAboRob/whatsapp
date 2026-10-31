@@ -133,7 +133,7 @@ export function DesktopDriveSettings() {
             <div className="min-w-0"><div className="truncate text-xs font-semibold text-white">{backup.name}</div><div className="mt-1 text-[11px] text-[#a5a5a5]">{new Date(backup.createdAt).toLocaleString('ar-JO')} · {(backup.size / 1024 / 1024).toFixed(1)} MB</div></div>
             <button type="button" disabled={busy || running} onClick={() => void send('restore', backup.name)} className="flex min-h-10 items-center gap-1.5 rounded-lg border border-[#3b4b44] px-3 text-xs font-bold text-[#21c063] disabled:opacity-50"><CloudDownload className="h-3.5 w-3.5" /> استرجاع</button>
           </div>)}
-          <p className="text-[11px] leading-relaxed text-[#a5a5a5]">ظهور الملف هنا يؤكد نسخه إلى مجلد Drive على الكمبيوتر. تحقق من اكتمال المزامنة في برنامج Google Drive قبل حذف أي بيانات محلية. الاسترجاع يضيف النسخة داخل تطبيق الحوالات، ولا يعيدها إلى واتساب الرسمي.</p>
+          <p className="text-[11px] leading-relaxed text-[#a5a5a5]">ظهور الملف هنا يؤكد نسخه إلى مجلد Drive على الكمبيوتر. تحقق من اكتمال المزامنة في برنامج Google Drive قبل حذف أي بيانات محلية. الاسترجاع يضيف النسخة داخل التطبيق.</p>
         </>
       )}
     </div>

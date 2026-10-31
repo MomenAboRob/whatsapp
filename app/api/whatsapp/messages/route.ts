@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getWhatsAppManager, type ChatMessage } from '@/lib/whatsapp-client';
 import { cleanPhoneNumber } from '@/lib/parser';
-import { syncAirtableLikes } from '@/lib/airtable-reactions';
 
 const recentMediaSends = new Map<string, Promise<{ success: boolean; message: string; messageId?: string }>>();
 
@@ -111,11 +110,6 @@ export async function POST(req: NextRequest) {
     const wa = getWhatsAppManager(req);
     const body = await req.json();
     const { action, message } = body;
-
-    if (action === 'sync_airtable_likes') {
-      const result = await syncAirtableLikes(wa);
-      return NextResponse.json({ success: true, ...result });
-    }
 
     if (action === 'send_media' && body.fileBase64 && (body.chat || body.chatJid || body.chatName)) {
       const targetChat = body.chat || body.chatJid || body.chatName;

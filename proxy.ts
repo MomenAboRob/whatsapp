@@ -3,11 +3,8 @@ import type { NextRequest } from 'next/server';
 import { SESSION_COOKIE_NAME, verifySessionToken } from '@/lib/auth';
 
 // مسارات API مسموحة بدون تسجيل دخول
-function isPublicApi(pathname: string, method: string): boolean {
+function isPublicApi(pathname: string): boolean {
   if (pathname === '/api/auth/login' || pathname === '/api/auth/logout') return true;
-  // إضافة كروم تقرأ البيانات المعلقة وصورة الوصل من صفحة البوابة
-  if (pathname === '/api/portal/pending' && (method === 'GET' || method === 'OPTIONS')) return true;
-  if (pathname === '/api/portal/receipt' && (method === 'GET' || method === 'OPTIONS')) return true;
   return false;
 }
 
@@ -25,7 +22,7 @@ export function proxy(request: NextRequest) {
 
   // حماية جميع مسارات الـ API (يجب فحصها قبل استثناء الملفات الثابتة)
   if (pathname.startsWith('/api/')) {
-    if (!user && !isPublicApi(pathname, request.method)) {
+    if (!user && !isPublicApi(pathname)) {
       return NextResponse.json({ error: 'غير مصرح، يرجى تسجيل الدخول' }, { status: 401 });
     }
     return NextResponse.next();

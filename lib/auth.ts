@@ -1,13 +1,6 @@
 import crypto from 'crypto';
-import { airtableFetch } from './airtable-request';
 
-const AIRTABLE_API_URL = 'https://api.airtable.com/v0';
-// المفاتيح تُقرأ من ملف .env.local فقط (لا تكتب أي مفتاح داخل الكود)
-const BASE_ID = process.env.AIRTABLE_BASE_ID || '';
-const USERS_TABLE = encodeURIComponent('المستخدمين');
-const TOKEN = process.env.AIRTABLE_API_TOKEN || '';
-
-export const SESSION_COOKIE_NAME = 'hawalat_session';
+export const SESSION_COOKIE_NAME = 'whatsapp_session';
 
 function getSessionSecret(): string {
   const secret = process.env.SESSION_SECRET;
@@ -33,88 +26,24 @@ export interface AuthResult {
   error?: string;
 }
 
-/**
- * التحقق اللحظي والمباشر من جدول (المستخدمين) في أيرتيبل
- * إذا تم تعديل الباسورد أو الإيميل أو إضافة أي مستخدم جديد، سيعمل فوراً
- */
-export async function authenticateWithAirtable(email: string, password: string): Promise<AuthResult> {
+/** Authenticate the account configured in the server environment. */
+export async function authenticateLocal(email: string, password: string): Promise<AuthResult> {
   if (!email || !password) {
     return { success: false, error: 'يرجى إدخال البريد الإلكتروني وكلمة المرور' };
   }
 
   const cleanEmail = email.trim().toLowerCase();
-  const inputPassword = password.trim();
-
-  // Local credentials are available only while running the development server.
-  if (process.env.NODE_ENV === 'development') {
-    const localEmail = process.env.LOCAL_AUTH_EMAIL?.trim().toLowerCase();
-    const localPassword = process.env.LOCAL_AUTH_PASSWORD;
-    if (localEmail && localPassword && cleanEmail === localEmail) {
-      const expected = Buffer.from(localPassword);
-      const received = Buffer.from(inputPassword);
-      if (expected.length === received.length && crypto.timingSafeEqual(expected, received)) {
-        return { success: true, user: { id: 'local-dev', name: 'Momen', email: localEmail } };
-      }
-      return { success: false, error: 'كلمة المرور غير صحيحة' };
-    }
+  const configuredEmail = process.env.LOCAL_AUTH_EMAIL?.trim().toLowerCase();
+  const configuredPassword = process.env.LOCAL_AUTH_PASSWORD;
+  if (!configuredEmail || !configuredPassword || cleanEmail !== configuredEmail) {
+    return { success: false, error: 'بيانات الدخول غير صحيحة' };
   }
-
-  try {
-    const url = `${AIRTABLE_API_URL}/${BASE_ID}/${USERS_TABLE}`;
-    const res = await airtableFetch(url, {
-      headers: {
-        Authorization: `Bearer ${TOKEN}`,
-      },
-      cache: 'no-store',
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      console.error('Airtable Auth Fetch Error:', res.status, errText);
-      return { success: false, error: 'تعذر الاتصال بقاعدة بيانات أيرتيبل حالياً' };
-    }
-
-    const data = await res.json();
-    const records = data.records || [];
-
-    // البحث عن المستخدم بمطابقة البريد الإلكتروني
-    const userRecord = records.find((r: any) => {
-      const recEmail = String(r.fields['الايميل'] || r.fields['البريد الالكتروني'] || r.fields['Email'] || '').trim().toLowerCase();
-      return recEmail === cleanEmail;
-    });
-
-    if (!userRecord) {
-      return { success: false, error: 'البريد الإلكتروني غير مسجل في النظام' };
-    }
-
-    const fields = userRecord.fields;
-
-    // التحقق من حالة التفعيل
-    const isActive = Boolean(fields['مفعل'] ?? fields['نشط'] ?? true);
-    if (!isActive) {
-      return { success: false, error: 'هذا الحساب غير مفعل حالياً، يرجى مراجعة المسؤول' };
-    }
-
-    // التحقق من كلمة المرور
-    const storedPassword = String(fields['كلمة المرور'] || fields['الباسورد'] || fields['Password'] || '').trim();
-    if (!storedPassword || storedPassword !== inputPassword) {
-      return { success: false, error: 'كلمة المرور غير صحيحة' };
-    }
-
-    const userName = String(fields['الاسم'] || fields['اسم المستخدم'] || fields['Name'] || cleanEmail.split('@')[0]);
-
-    return {
-      success: true,
-      user: {
-        id: userRecord.id,
-        name: userName,
-        email: cleanEmail,
-      },
-    };
-  } catch (error: any) {
-    console.error('Authentication error:', error);
-    return { success: false, error: 'حدث خطأ غير متوقع أثناء تسجيل الدخول' };
+  const expected = Buffer.from(configuredPassword);
+  const received = Buffer.from(password.trim());
+  if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) {
+    return { success: false, error: 'بيانات الدخول غير صحيحة' };
   }
+  return { success: true, user: { id: 'local-dev', name: process.env.LOCAL_AUTH_NAME || 'Momen', email: configuredEmail } };
 }
 
 /**
@@ -170,7 +99,12 @@ export function verifySessionToken(token?: string | null): AuthUser | null {
 /**
  * استخراج بيانات المستخدم المعتمد من الطلب (Request) سواء من الكوكيز أو الهيدر
  */
-export function getAuthUserFromRequest(req?: any): AuthUser | null {
+type AuthRequest = {
+  cookies?: { get?: (name: string) => { value?: string } | undefined };
+  headers?: { get?: (name: string) => string | null };
+};
+
+export function getAuthUserFromRequest(req?: AuthRequest): AuthUser | null {
   if (!req) return null;
   let token: string | undefined | null;
 

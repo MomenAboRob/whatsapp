@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateWithAirtable, createSessionToken } from '@/lib/auth';
+import { authenticateLocal, createSessionToken, SESSION_COOKIE_NAME } from '@/lib/auth';
 
 const windowMs = 15 * 60 * 1000;
 const maxFailures = 8;
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const result = await authenticateWithAirtable(email, password);
+    const result = await authenticateLocal(email, password);
 
     if (!result.success || !result.user) {
       if (failures.size > 1000) {
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
 
     // تعيين الكوكي الآمن للجلسة (صالحة لمدة 30 يوماً)
     response.cookies.set({
-      name: 'hawalat_session',
+      name: SESSION_COOKIE_NAME,
       value: token,
       httpOnly: true,
       secure: isHttps,

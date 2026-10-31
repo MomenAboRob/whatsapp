@@ -53,6 +53,7 @@ export function MobilePWAInstallPrompt() {
     const ua = navigator.userAgent || '';
     const isIOS = /iPad|iPhone|iPod/.test(ua) && !(window as any).MSStream;
     const isAndroid = /Android/i.test(ua);
+    if (!isIOS && !isAndroid) return;
 
     if (isIOS) {
       setPlatform('ios');

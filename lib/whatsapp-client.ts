@@ -4,6 +4,7 @@ import { EventEmitter } from 'events';
 import QRCode from 'qrcode';
 import { normalizeMessageContent } from '@whiskeysockets/baileys';
 import { getAuthUserFromRequest } from '@/lib/auth';
+import { recordLiveMention, startWorkspaceScheduler } from '@/lib/whatsapp-workspace';
 
 const isConversationJid = (jid?: string) => !jid || (!jid.endsWith('@broadcast') && !jid.endsWith('@newsletter'));
 const isContactName = (value?: string): boolean => Boolean(value?.trim() && value !== 'null' && !/^[+\d\s().∙•*-]+$/.test(value.trim()));
@@ -475,6 +476,7 @@ export class WhatsAppManager {
       inst.lastContactSnapshotTime = 0;
     }
 
+    startWorkspaceScheduler(inst);
     return inst;
   }
 
@@ -2370,7 +2372,7 @@ export class WhatsAppManager {
       this.sock.ev.on('messages.upsert', async (m: any) => {
         if (m.messages && Array.isArray(m.messages)) {
           for (const msg of m.messages) {
-            await this.ingestBaileysMessage(msg);
+            await this.ingestBaileysMessage(msg, m.type === 'notify');
           }
         }
       });
@@ -2717,7 +2719,7 @@ export class WhatsAppManager {
     }
   }
 
-  private async ingestBaileysMessage(msg: any) {
+  private async ingestBaileysMessage(msg: any, live = false) {
     if (!msg?.message && !msg?.reactions) return;
     if (!isConversationJid(msg.key?.remoteJid)) return;
     const id = msg.key?.id || String(Date.now() + Math.random());
@@ -2941,6 +2943,11 @@ export class WhatsAppManager {
 
     this.applyPendingReactions(id);
     this.persistData();
+    if (live && !fromMe) {
+      const savedMessage = this.incomingMessages[0];
+      void recordLiveMention(this, savedMessage)
+        .catch((error) => console.warn('تعذر تسجيل المنشن الجديد:', error));
+    }
     this.events.emit('message', this.incomingMessages[0]);
 
     // الوسائط القديمة تُجلب عند فتح المحادثة؛ تنزيل تاريخ كامل هنا يزاحم الصور الظاهرة.

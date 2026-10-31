@@ -66,8 +66,8 @@ export function DriveBackupSettings() {
   return (
     <div className="flex flex-col gap-4 text-sm">
       <div className="rounded-xl border border-[#2e2f2f] bg-[#1c1d1d] p-4">
-        <div className="flex items-center gap-2 font-bold text-white"><HardDrive className="h-5 w-5 text-[#21c063]" /> نسخة تطبيق الحوالات على Google Drive</div>
-        <p className="mt-2 text-xs leading-relaxed text-[#a5a5a5]">هذا حساب Drive مستقل تختاره للتطبيق. لا يقرأ التطبيق حساب النسخ المحدد داخل واتساب، ولا يعيد الرسائل إلى واتساب الرسمي. الاسترجاع يضيف الرسائل والصور المحفوظة إلى تطبيق الحوالات دون حذف الموجود.</p>
+        <div className="flex items-center gap-2 font-bold text-white"><HardDrive className="h-5 w-5 text-[#21c063]" /> نسخة المحادثات على Google Drive</div>
+        <p className="mt-2 text-xs leading-relaxed text-[#a5a5a5]">هذا حساب Drive مستقل تختاره للتطبيق. الاسترجاع يضيف الرسائل والصور المحفوظة إلى التطبيق دون حذف الموجود.</p>
       </div>
 
       <DesktopDriveSettings />

@@ -137,6 +137,7 @@ interface WhatsAppChatInterfaceProps {
   onOpenReview: (data: ParsedTransfer, imageUrl?: string, msgId?: string) => void;
   onOpenQRModal: () => void;
   onOpenSettings?: () => void;
+  onScheduleChat?: (chat: { id: string; name: string }, text: string) => void;
   onActiveChatChange?: (isOpen: boolean) => void;
   isPopoutMode?: boolean;
   initialChat?: string;
@@ -1085,6 +1086,7 @@ export function WhatsAppChatInterface({
   onOpenReview,
   onOpenQRModal,
   onOpenSettings,
+  onScheduleChat,
   onActiveChatChange,
   isPopoutMode = false,
   initialChat = '',
@@ -10385,6 +10387,20 @@ export function WhatsAppChatInterface({
                 className="w-full bg-transparent text-base md:text-xs text-[#fafafa] placeholder-[#a5a5a5] focus:outline-none"
               />
             </div>
+            {!editingMessage && !isPopoutMode && onScheduleChat && /@(s\.whatsapp\.net|lid)$/.test(activeChatInfo?.id || activeGroupJid || activeGroup) && (
+              <button
+                type="button"
+                onClick={() => {
+                  const draft = getMessageText();
+                  onScheduleChat({ id: activeChatInfo?.id || activeGroupJid || activeGroup, name: resolvedActiveContactName }, draft);
+                }}
+                className="flex h-8.5 w-8.5 shrink-0 items-center justify-center rounded-xl text-[#a5a5a5] hover:bg-[#2e2f2f] hover:text-[#21c063]"
+                title="جدولة رسالة لهذه المحادثة"
+                aria-label="جدولة رسالة لهذه المحادثة"
+              >
+                <Calendar className="h-4.5 w-4.5" />
+              </button>
+            )}
             {editingMessage ? (
               <div className="flex items-center gap-1.5 shrink-0">
                 <Button
