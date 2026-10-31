@@ -180,6 +180,7 @@ export function WhatsAppWorkspace({
                       <time className="text-xs text-[#8da198]">{dateLabel(item.timestampMs)}</time>
                     </div>
                     <p dir="auto" className="mt-2 whitespace-pre-wrap break-words text-sm leading-6">{item.text || 'منشن في رسالة وسائط'}</p>
+                    {item.emailError && <p className="mt-2 text-xs text-rose-300">تعذر إرسال تنبيه البريد: {item.emailError}</p>}
                     <div className="mt-3 flex flex-wrap gap-2">
                       <SmallButton onClick={() => onOpenChat(item.chatJid)}><ArrowRight className="h-3.5 w-3.5" />فتح المحادثة</SmallButton>
                       {item.decision !== 'important' && <SmallButton active onClick={() => void act(item.id, { action: 'update_mention', id: item.id, decision: 'important' })} disabled={busy === item.id}><Star className="h-3.5 w-3.5" />مهم، أنشئ مهمة</SmallButton>}
