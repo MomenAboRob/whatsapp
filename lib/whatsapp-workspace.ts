@@ -4,6 +4,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID }
 import nodemailer from 'nodemailer';
 import type { ChatMessage, WhatsAppManager } from '@/lib/whatsapp-client';
 import { rawWhatsAppText } from '@/lib/whatsapp-message-text';
+import { renderMentionEmail } from '@/lib/mention-email';
 
 export type MentionDecision = 'new' | 'dismissed' | 'important';
 export type TaskStatus = 'open' | 'done';
@@ -252,11 +253,11 @@ export async function verifySmtp(settings: WorkspaceSettings): Promise<void> {
 async function sendMentionEmail(mention: MentionItem, settings: WorkspaceSettings): Promise<void> {
   if (!settings.emailEnabled || !settings.emailTo || !smtpConfigured(settings)) return;
   const { transporter, user, custom } = smtpTransport(settings);
+  const email = renderMentionEmail(mention, process.env.APP_PUBLIC_URL);
   await transporter.sendMail({
     from: custom ? user : process.env.SMTP_FROM || user,
     to: settings.emailTo,
-    subject: `منشن جديد في ${mention.chatName}`,
-    text: `ذكرك ${mention.sender} في مجموعة ${mention.chatName}.\n\n${mention.text}\n\nافتح لوحة المنشنات في التطبيق للمتابعة.`,
+    ...email,
   });
 }
 
