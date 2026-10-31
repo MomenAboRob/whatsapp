@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { LayoutDashboard, MessageSquare, Send, Settings } from 'lucide-react';
+import { FileDigit, LayoutDashboard, MessageSquare, Send, Settings } from 'lucide-react';
 import { WhatsAppWorkspace } from '@/components/whatsapp-workspace';
+import { WhatsAppNumberCenter } from '@/components/whatsapp-number-center';
 
 const WhatsAppChatInterface = dynamic(
   () => import('@/components/whatsapp-chat-interface').then((module) => module.WhatsAppChatInterface),
@@ -28,7 +29,7 @@ export default function HomePage() {
   const [isQRModalOpen, setIsQRModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [popoutChat, setPopoutChat] = useState<string | null>(null);
-  const [view, setView] = useState<'whatsapp' | 'dashboard' | 'compose'>('whatsapp');
+  const [view, setView] = useState<'whatsapp' | 'dashboard' | 'compose' | 'numbers'>('whatsapp');
   const [selectedChat, setSelectedChat] = useState('');
   const [composeTarget, setComposeTarget] = useState('');
   const [composeText, setComposeText] = useState('');
@@ -100,6 +101,7 @@ export default function HomePage() {
         <span className="ml-3 hidden text-sm font-black text-[#21c063] sm:inline">واتساب</span>
         <NavButton active={view === 'whatsapp'} onClick={() => setView('whatsapp')} icon={MessageSquare}>المحادثات</NavButton>
         <NavButton active={view === 'dashboard'} onClick={() => setView('dashboard')} icon={LayoutDashboard} badge={newMentions}>الداشبورد</NavButton>
+        <NavButton active={view === 'numbers'} onClick={() => setView('numbers')} icon={FileDigit}>مركز الملفات</NavButton>
         <NavButton active={view === 'compose'} onClick={() => openCompose()} icon={Send}>إرسال لعدة جهات</NavButton>
         <div className="flex-1" />
         <NavButton active={false} onClick={() => setIsSettingsOpen(true)} icon={Settings}>الإعدادات</NavButton>
@@ -124,7 +126,8 @@ export default function HomePage() {
           }}
         />
       </div>
-      {!popoutChat && view !== 'whatsapp' && <div className="min-h-0 flex-1">
+      {!popoutChat && view === 'numbers' && <div className="min-h-0 flex-1"><WhatsAppNumberCenter /></div>}
+      {!popoutChat && (view === 'dashboard' || view === 'compose') && <div className="min-h-0 flex-1">
         <WhatsAppWorkspace
           key={`${view}-${composeRevision}-${taskRevision}`}
           view={view}
