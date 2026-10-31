@@ -318,8 +318,20 @@ export function normalizeSearchText(str: string): string {
   return res;
 }
 
-// نمط تعبيري شامل يتعرف بالترتيب على: البريد، أرقام الهواتف (الإنجليزية والعربية)، المنشن
-const MENTIONS_EMAIL_PHONE_REGEX = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})|((?:\+|00)?[\d٠-٩۰-۹]{1,4}(?:[\s\-]?[\d٠-٩۰-۹]+){2,5}|(?:05[968420]|07[789]|٠٥[٩٦٨٤٢٠]|٠٧[٧٨٩]|۰۵[۹۶۸۴۲۰]|۰۷[۷۸۹])[\s\-]?[\d٠-٩۰-۹]{3}[\s\-]?[\d٠-٩۰-۹]{3,4})|((?<=^|[\s\n])@[\w\u0600-\u06FF]+)/g;
+// افحص الرابط أولًا كي لا تتحول أرقام أو علامات @ الموجودة داخله إلى عناصر منفصلة.
+const MESSAGE_TOKEN_REGEX = /((?:https?:\/\/|www\.)[^\s<>"'`]+)|([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})|((?:\+|00)?[\d٠-٩۰-۹]{1,4}(?:[\s\-]?[\d٠-٩۰-۹]+){2,5}|(?:05[968420]|07[789]|٠٥[٩٦٨٤٢٠]|٠٧[٧٨٩]|۰۵[۹۶۸۴۲۰]|۰۷[۷۸۹])[\s\-]?[\d٠-٩۰-۹]{3}[\s\-]?[\d٠-٩۰-۹]{3,4})|((?<=^|[\s\n])@[\w\u0600-\u06FF]+)/gi;
+
+function splitTrailingUrlPunctuation(value: string): [string, string] {
+  let url = value;
+  while (true) {
+    const withoutPunctuation = url.replace(/[.,!?;:،؛]+$/u, '');
+    if (withoutPunctuation !== url) { url = withoutPunctuation; continue; }
+    if (url.endsWith(')') && (url.match(/\)/g)?.length || 0) > (url.match(/\(/g)?.length || 0)) { url = url.slice(0, -1); continue; }
+    if (url.endsWith(']') || url.endsWith('}')) { url = url.slice(0, -1); continue; }
+    break;
+  }
+  return [url, value.slice(url.length)];
+}
 
 function renderMessageTextWithMentions(
   text?: string,
@@ -368,14 +380,34 @@ function renderMessageTextWithMentions(
   const elements: React.ReactNode[] = [];
   let keyIdx = 0;
 
-  MENTIONS_EMAIL_PHONE_REGEX.lastIndex = 0;
-  while ((match = MENTIONS_EMAIL_PHONE_REGEX.exec(text)) !== null) {
+  MESSAGE_TOKEN_REGEX.lastIndex = 0;
+  while ((match = MESSAGE_TOKEN_REGEX.exec(text)) !== null) {
     if (match.index > lastIndex) {
       elements.push(renderHighlightedString(text.substring(lastIndex, match.index), `txt-${keyIdx++}`));
     }
     if (match[1]) {
+      const [url, punctuation] = splitTrailingUrlPunctuation(match[1]);
+      const href = url.toLowerCase().startsWith('www.') ? `https://${url}` : url;
+      elements.push(
+        <a
+          key={`url-${keyIdx++}`}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          dir="ltr"
+          onClick={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.stopPropagation()}
+          className="text-[#53bdeb] underline underline-offset-2 hover:text-[#8bd7f5] break-all cursor-pointer"
+          title="فتح الرابط في المتصفح"
+        >
+          <bdi dir="ltr">{renderHighlightedString(url, `url-${keyIdx++}`)}</bdi>
+        </a>
+      );
+      if (punctuation) elements.push(punctuation);
+    } else if (match[2]) {
       // البريد الإلكتروني: رابط أخضر مثل واتساب، النقر عليه يفتح برنامج الإيميل لإرسال رسالة
-      const email = match[1];
+      const email = match[2];
       const isEmailMatch = Boolean(normQ && email.toLowerCase().includes(normQ));
       elements.push(
         <a
@@ -391,10 +423,10 @@ function renderMessageTextWithMentions(
           <bdi dir="ltr">{email}</bdi>
         </a>
       );
-    } else if (match[2]) {
+    } else if (match[3]) {
       // رقم الهاتف: أخضر مثل واتساب، النقر عليه يعرض خيارات (محادثة مع الرقم / نسخ الرقم)
       // عزل LTR لمنع انقلاب إشارة + وكود الدولة داخل النص العربي
-      const phone = match[2];
+      const phone = match[3];
       const cleanDigitsQ = normQ.replace(/\D/g, '');
       const isPhoneMatch = Boolean(
         normQ && (phone.includes(q!) || (cleanDigitsQ.length >= 3 && phone.replace(/\D/g, '').includes(cleanDigitsQ)))
@@ -416,9 +448,9 @@ function renderMessageTextWithMentions(
           <bdi dir="ltr">{phone}</bdi>
         </button>
       );
-    } else if (match[3]) {
+    } else if (match[4]) {
       // المنشن للأشخاص
-      const mention = match[3];
+      const mention = match[4];
       elements.push(
         <span
           key={`mention-${keyIdx++}`}
@@ -429,7 +461,7 @@ function renderMessageTextWithMentions(
         </span>
       );
     }
-    lastIndex = MENTIONS_EMAIL_PHONE_REGEX.lastIndex;
+    lastIndex = MESSAGE_TOKEN_REGEX.lastIndex;
   }
 
   if (lastIndex < text.length) {
