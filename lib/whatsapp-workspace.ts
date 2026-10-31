@@ -42,6 +42,12 @@ export interface MessageTask {
   task: TaskDetails;
 }
 
+export interface ManualTask {
+  id: string;
+  createdAt: string;
+  task: TaskDetails;
+}
+
 export interface RecipientList {
   id: string;
   name: string;
@@ -72,6 +78,7 @@ export interface WorkspaceSettings {
 export interface WorkspaceData {
   mentions: MentionItem[];
   messageTasks: MessageTask[];
+  manualTasks: ManualTask[];
   recipientLists: RecipientList[];
   schedules: ScheduledMessage[];
   settings: WorkspaceSettings;
@@ -86,6 +93,7 @@ const dataPath = (userId: string) => path.join(process.cwd(), 'whatsapp_auth', `
 const initialData = (): WorkspaceData => ({
   mentions: [],
   messageTasks: [],
+  manualTasks: [],
   recipientLists: [],
   schedules: [],
   settings: { emailTo: '', emailEnabled: true, browserEnabled: true },
@@ -98,6 +106,7 @@ export function readWorkspace(userId: string): WorkspaceData {
     return {
       mentions: Array.isArray(data.mentions) ? data.mentions : [],
       messageTasks: Array.isArray(data.messageTasks) ? data.messageTasks : [],
+      manualTasks: Array.isArray(data.manualTasks) ? data.manualTasks : [],
       recipientLists: Array.isArray(data.recipientLists) ? data.recipientLists : [],
       schedules: Array.isArray(data.schedules) ? data.schedules : [],
       settings: { ...defaults.settings, ...(data.settings || {}) },

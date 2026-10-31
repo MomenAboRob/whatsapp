@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
     body = parsed as Record<string, unknown>;
   } catch { return bad('طلب غير صالح'); }
   const action = String(body.action || '');
-  const data = action === 'create_task' ? scanMentions(wa) : readWorkspace(user.id);
+  const data = action === 'create_task' && body.source !== 'manual' ? scanMentions(wa) : readWorkspace(user.id);
 
   if (action === 'verify_smtp') {
     try {
@@ -78,6 +78,12 @@ export async function POST(req: NextRequest) {
     const dueAt = due.toISOString();
     const source = String(body.source || '');
     const sourceId = String(body.id || '');
+    if (source === 'manual') {
+      const item = { id: randomUUID(), createdAt: new Date().toISOString(), task: { title, notes, dueAt, status: 'open' as const } };
+      data.manualTasks.unshift(item);
+      saveWorkspace(user.id, data);
+      return NextResponse.json({ success: true, task: item.task });
+    }
     if (source === 'mention') {
       const item = data.mentions.find((mention) => mention.id === sourceId);
       if (!item) return bad('المنشن غير موجود', 404);
@@ -135,7 +141,8 @@ export async function POST(req: NextRequest) {
 
   if (action === 'update_task') {
     const task = data.mentions.find((mention) => mention.id === body.id)?.task ||
-      data.messageTasks.find((item) => item.id === body.id)?.task;
+      data.messageTasks.find((item) => item.id === body.id)?.task ||
+      data.manualTasks.find((item) => item.id === body.id)?.task;
     if (!task) return bad('المهمة غير موجودة', 404);
     if (body.status !== undefined && body.status !== 'open' && body.status !== 'done') return bad('حالة مهمة غير صالحة');
     if (body.status) {

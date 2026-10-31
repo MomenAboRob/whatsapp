@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
   if (!user) return bad('غير مصرح', 401);
   const id = req.nextUrl.searchParams.get('id') || '';
   const workspace = readWorkspace(user.id);
-  const task = workspace.mentions.find((item) => item.id === id)?.task || workspace.messageTasks.find((item) => item.id === id)?.task;
+  const task = workspace.mentions.find((item) => item.id === id)?.task || workspace.messageTasks.find((item) => item.id === id)?.task || workspace.manualTasks.find((item) => item.id === id)?.task;
   if (!task?.attachment) return bad('الملف غير موجود', 404);
   const file = filePath(user.id, id);
   if (!fs.existsSync(file)) return bad('الملف غير موجود', 404);
@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
   const file = upload as File;
   if (file.size < 1 || file.size > 10 * 1024 * 1024) return bad('حجم الملف يجب أن يكون أقل من 10 ميغابايت');
   const data = readWorkspace(user.id);
-  const task = data.mentions.find((item) => item.id === id)?.task || data.messageTasks.find((item) => item.id === id)?.task;
+  const task = data.mentions.find((item) => item.id === id)?.task || data.messageTasks.find((item) => item.id === id)?.task || data.manualTasks.find((item) => item.id === id)?.task;
   if (!task) return bad('المهمة غير موجودة', 404);
   const target = filePath(user.id, id);
   fs.mkdirSync(path.dirname(target), { recursive: true });
