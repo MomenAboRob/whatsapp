@@ -1478,6 +1478,11 @@ export function WhatsAppChatInterface({
   const [isEditingSaving, setIsEditingSaving] = useState<boolean>(false);
   const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
   const messageInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!activeGroup) return;
+    const frame = requestAnimationFrame(() => messageInputRef.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [activeGroup]);
   const getMessageText = () => messageInputRef.current?.value ?? '';
   const setMessageText = (value: string) => {
     if (messageInputRef.current) messageInputRef.current.value = value;
@@ -6232,6 +6237,7 @@ export function WhatsAppChatInterface({
     }
     hasSelectedChatRef.current = true;
     targetJumpMsgIdRef.current = targetMsgId || null;
+    messageInputRef.current?.focus({ preventScroll: true });
     activeGroupRef.current = groupName;
     setActiveGroup(groupName);
 

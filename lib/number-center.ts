@@ -3,9 +3,11 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 
 export type NumberFile = { id: string; name: string; createdAt: string; numbers: string[] };
-export type NumberAllocation = { id: string; fileId: string; fileName?: string; personJid: string; personName: string; numbers: string[]; createdAt: string };
+export type NumberAllocation = { id: string; fileId: string; fileName?: string; batchId?: string; branchName?: string; personJid: string; personName: string; numbers: string[]; createdAt: string };
 export type NumberBranch = { id: string; name: string; members: Array<{ id: string; name: string }>; createdAt: string };
-export type NumberCenterData = { files: NumberFile[]; allocations: NumberAllocation[]; branches: NumberBranch[] };
+export type NumberDispatchItem = { allocationId: string; status: 'pending' | 'sending' | 'sent' | 'failed' | 'uncertain'; error?: string; sentAt?: string };
+export type NumberDispatch = { id: string; batchId: string; status: 'running' | 'paused' | 'completed' | 'canceled'; createdAt: string; nextSendAt?: string; items: NumberDispatchItem[] };
+export type NumberCenterData = { files: NumberFile[]; allocations: NumberAllocation[]; branches: NumberBranch[]; dispatches: NumberDispatch[] };
 
 export const allocationMessageText = (allocation: NumberAllocation) => allocation.numbers.join('\n');
 
@@ -18,11 +20,12 @@ export function readNumberCenter(userId: string): NumberCenterData {
       files: Array.isArray(value.files) ? value.files : [],
       allocations: Array.isArray(value.allocations) ? value.allocations : [],
       branches: Array.isArray(value.branches) ? value.branches : [],
+      dispatches: Array.isArray(value.dispatches) ? value.dispatches : [],
     };
-  } catch { return { files: [], allocations: [], branches: [] }; }
+  } catch { return { files: [], allocations: [], branches: [], dispatches: [] }; }
 }
 
-function saveNumberCenter(userId: string, data: NumberCenterData) {
+export function saveNumberCenter(userId: string, data: NumberCenterData) {
   const target = filePath(userId);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const temp = `${target}.${process.pid}.tmp`;
@@ -68,7 +71,7 @@ export function addNumberFiles(userId: string, uploads: Array<{ name: string; te
   return results;
 }
 
-export function allocateNumbers(userId: string, fileId: string, recipients: Array<{ id: string; name: string }>, perPerson: number) {
+export function allocateNumbers(userId: string, fileId: string, recipients: Array<{ id: string; name: string }>, perPerson: number, branchName = '') {
   if (!Number.isSafeInteger(perPerson) || perPerson < 1 || perPerson > 1000) throw new Error('حدد عددًا بين 1 و1000 لكل شخص');
   if (!recipients.length || recipients.length > 100) throw new Error('اختر من شخص واحد إلى 100 شخص');
   if (new Set(recipients.map((recipient) => recipient.id)).size !== recipients.length) throw new Error('توجد أسماء مكررة في الاختيار');
@@ -83,8 +86,9 @@ export function allocateNumbers(userId: string, fileId: string, recipients: Arra
     throw new Error('عدد الأرقام لكل شخص كبير جدًا لرسالة واتساب واحدة. قلّل العدد.');
   }
   const createdAt = new Date().toISOString();
+  const batchId = randomUUID();
   const allocations = recipients.map((recipient, index): NumberAllocation => ({
-    id: randomUUID(), fileId, fileName: file.name, personJid: recipient.id, personName: recipient.name,
+    id: randomUUID(), fileId, fileName: file.name, batchId, branchName, personJid: recipient.id, personName: recipient.name,
     numbers: available.slice(index * perPerson, (index + 1) * perPerson), createdAt,
   }));
   data.allocations.unshift(...allocations);
@@ -159,7 +163,20 @@ export function numberCenterSummary(data: NumberCenterData) {
   const used = new Set(data.allocations.flatMap((allocation) => allocation.numbers));
   return {
     files: data.files.map((file) => ({ id: file.id, name: file.name, createdAt: file.createdAt, total: file.numbers.length, remaining: file.numbers.filter((number) => !used.has(number)).length })),
-    allocations: data.allocations.map((item) => ({ id: item.id, fileId: item.fileId, fileName: item.fileName, personJid: item.personJid, personName: item.personName, count: item.numbers.length, createdAt: item.createdAt })),
+    allocations: data.allocations.map((item) => ({ id: item.id, fileId: item.fileId, fileName: item.fileName, batchId: item.batchId, branchName: item.branchName, personJid: item.personJid, personName: item.personName, count: item.numbers.length, createdAt: item.createdAt })),
     branches: data.branches.map((branch) => ({ id: branch.id, name: branch.name, members: branch.members, createdAt: branch.createdAt })),
+  };
+}
+
+export function numberBatchPreview(userId: string, batchId: string) {
+  const data = readNumberCenter(userId);
+  const allocations = data.allocations.filter((item) => item.batchId === batchId);
+  if (!allocations.length) throw new Error('دفعة الحجز غير موجودة');
+  return {
+    id: batchId,
+    branchName: allocations[0].branchName || 'الفرع',
+    fileName: allocations[0].fileName || data.files.find((item) => item.id === allocations[0].fileId)?.name || 'ملف الأرقام',
+    allocations: allocations.map((item) => ({ id: item.id, personJid: item.personJid, personName: item.personName, count: item.numbers.length, text: allocationMessageText(item) })),
+    dispatch: data.dispatches.find((item) => item.batchId === batchId) || null,
   };
 }

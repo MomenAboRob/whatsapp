@@ -1,13 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Download, FileText, Loader2, MessageSquare, Pencil, Plus, Search, Trash2, Upload, Users, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Download, FileText, Loader2, MessageSquare, Pencil, Plus, Search, Send, Trash2, Upload, Users, X } from 'lucide-react';
 
 type FileSummary = { id: string; name: string; createdAt: string; total: number; remaining: number };
-type AllocationSummary = { id: string; fileId: string; fileName?: string; personJid: string; personName: string; count: number; createdAt: string };
+type AllocationSummary = { id: string; fileId: string; fileName?: string; batchId?: string; branchName?: string; personJid: string; personName: string; count: number; createdAt: string };
 type Contact = { id: string; name: string; phone?: string };
 type Branch = { id: string; name: string; members: Array<{ id: string; name: string }>; createdAt: string };
 type Snapshot = { files: FileSummary[]; allocations: AllocationSummary[]; contacts: Contact[]; branches: Branch[] };
+type BatchPreview = { id: string; branchName: string; fileName: string; active: boolean; allocations: Array<{ id: string; personJid: string; personName: string; count: number; text: string }>; dispatch: null | { status: 'running' | 'paused' | 'completed' | 'canceled'; items: Array<{ allocationId: string; status: 'pending' | 'sending' | 'sent' | 'failed' | 'uncertain'; error?: string }> } };
 
 export function WhatsAppNumberCenter({ onPrepareMessage }: { onPrepareMessage: (target: string, text: string) => void }) {
   const [data, setData] = useState<Snapshot | null>(null);
@@ -21,6 +22,9 @@ export function WhatsAppNumberCenter({ onPrepareMessage }: { onPrepareMessage: (
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [previewBatchId, setPreviewBatchId] = useState('');
+  const [preview, setPreview] = useState<BatchPreview | null>(null);
+  const revealPreviewRef = useRef(false);
 
   const refresh = useCallback(async () => {
     const response = await fetch('/api/whatsapp/number-center', { cache: 'no-store' });
@@ -29,8 +33,38 @@ export function WhatsAppNumberCenter({ onPrepareMessage }: { onPrepareMessage: (
     setData(json);
     setFileId((current) => json.files.some((file: FileSummary) => file.id === current) ? current : '');
     setBranchId((current) => json.branches.some((branch: Branch) => branch.id === current) ? current : '');
+    setPreviewBatchId((current) => current || json.allocations.find((item: AllocationSummary) => item.batchId)?.batchId || '');
   }, []);
   useEffect(() => { void refresh().catch((err) => setError(err.message)); }, [refresh]);
+  useEffect(() => {
+    if (!previewBatchId) return;
+    let active = true;
+    const load = async () => {
+      try {
+        const response = await fetch(`/api/whatsapp/number-center?batch=${encodeURIComponent(previewBatchId)}`, { cache: 'no-store' });
+        const json = await response.json();
+        if (!response.ok) throw new Error(json.error || 'تعذر عرض الدفعة');
+        if (active) setPreview(json.batch);
+      } catch (err) { if (active) setError(err instanceof Error ? err.message : 'تعذر عرض الدفعة'); }
+    };
+    void load();
+    return () => { active = false; };
+  }, [previewBatchId]);
+  useEffect(() => {
+    if (!previewBatchId || preview?.dispatch?.status !== 'running' || !preview.active) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const response = await fetch(`/api/whatsapp/number-center?batch=${encodeURIComponent(previewBatchId)}`, { cache: 'no-store' });
+        if (response.ok) setPreview((await response.json()).batch);
+      } catch { /* The next refresh will retry. */ }
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [previewBatchId, preview?.dispatch?.status, preview?.active]);
+  useEffect(() => {
+    if (!preview || !revealPreviewRef.current) return;
+    revealPreviewRef.current = false;
+    document.getElementById('number-batch-preview')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [preview]);
 
   const currentFile = data?.files.find((file) => file.id === fileId);
   const currentBranch = data?.branches.find((branch) => branch.id === branchId);
@@ -65,7 +99,10 @@ export function WhatsAppNumberCenter({ onPrepareMessage }: { onPrepareMessage: (
       });
       const json = await response.json();
       if (!response.ok) throw new Error(json.error || 'تعذر توزيع الأرقام');
-      setNotice(`تم حجز ${currentBranch.members.length * perPerson} رقم لـ ${currentBranch.members.length} أشخاص في فرع ${currentBranch.name}. يمكنك تنزيل نصيب كل شخص من السجل أدناه.`);
+      setNotice(`تم حجز ${currentBranch.members.length * perPerson} رقم لـ ${currentBranch.members.length} أشخاص في فرع ${currentBranch.name}. راجع الرسائل أدناه قبل الإرسال.`);
+      setPreview(null);
+      revealPreviewRef.current = true;
+      setPreviewBatchId(json.batchId);
       await refresh();
     } catch (err) { setError(err instanceof Error ? err.message : 'تعذر توزيع الأرقام'); }
     finally { setBusy(false); }
@@ -124,6 +161,23 @@ export function WhatsAppNumberCenter({ onPrepareMessage }: { onPrepareMessage: (
     finally { setBusy(false); }
   };
 
+  const batchAction = async (action: 'send_batch' | 'cancel_batch') => {
+    if (!preview || busy) return;
+    if (action === 'send_batch' && !window.confirm(`تأكيد إرسال الأرقام إلى ${preview.allocations.length} أشخاص في فرع ${preview.branchName}؟ ستُرسل رسالة واحدة لكل شخص، بفاصل 15 ثانية تقريبًا.`)) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const response = await fetch('/api/whatsapp/number-center', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, batchId: preview.id }),
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.error || 'تعذر تحديث الإرسال');
+      setPreview((current) => current?.id === preview.id ? { ...current, active: action === 'send_batch', dispatch: json.dispatch } : current);
+      setNotice(action === 'send_batch' ? 'بدأ إرسال الرسائل بالترتيب، بفاصل 15 ثانية تقريبًا بين الأشخاص.' : 'توقف إرسال الرسائل المتبقية. قد تكتمل الرسالة الجاري إرسالها الآن.');
+    } catch (err) { setError(err instanceof Error ? err.message : 'تعذر تحديث الإرسال'); }
+    finally { setBusy(false); }
+  };
+
   return <div dir="rtl" className="h-full overflow-y-auto bg-[#111716] px-4 py-5 text-[#f5f7f6] sm:px-7">
     <div className="mx-auto max-w-6xl space-y-5">
       <header><p className="text-xs font-bold text-[#21c063]">توزيع الأرقام</p><h1 className="mt-1 text-2xl font-bold">مركز الملفات</h1><p className="mt-1 text-sm text-[#98aaa2]">ارفع ملفات TXT أو CSV، ثم احجز أرقامًا جديدة لكل شخص. الأرقام المحجوزة لا تدخل في أي توزيع لاحق.</p></header>
@@ -146,10 +200,15 @@ export function WhatsAppNumberCenter({ onPrepareMessage }: { onPrepareMessage: (
           <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[#98aaa2]"><Users className="h-4 w-4" />{currentBranch?.members.length || 0} أشخاص · المطلوب {(currentBranch?.members.length || 0) * (Number.isFinite(perPerson) ? perPerson : 0)} رقم · المتبقي في الملف {currentFile?.remaining || 0}</div>
           {currentBranch && <div className="mt-3 rounded-xl border border-[#34453c] bg-[#111716] p-3"><div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold">أعضاء فرع {currentBranch.name}</span><button type="button" onClick={() => openBranchEditor(currentBranch)} className="text-xs font-bold text-[#21c063] hover:underline">تعديل الأعضاء</button></div><p className="mt-2 text-xs leading-6 text-[#98aaa2]">{currentBranch.members.length ? currentBranch.members.map((member) => member.name).join('، ') : 'لا يوجد أشخاص في هذا الفرع بعد.'}</p></div>}
           <button type="button" disabled={busy || !fileId || !currentBranch?.members.length || !currentFile?.remaining} onClick={() => void allocate()} className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-[#21c063] px-4 py-2.5 text-sm font-bold text-[#092116] disabled:cursor-not-allowed disabled:opacity-50">{busy && <Loader2 className="h-4 w-4 animate-spin" />}حجز أرقام للفرع</button>
-          <p className="mt-2 text-xs text-[#98aaa2]">بعد الحجز، جهّز رسالة واحدة لكل شخص تحتوي أرقامه، رقمًا في كل سطر. لن تُرسل تلقائيًا.</p>
+          <p className="mt-2 text-xs text-[#98aaa2]">بعد الحجز ستظهر رسائل الأشخاص للمراجعة. لا يُرسل شيء إلا بعد ضغط زر تأكيد الإرسال.</p>
         </section>
       </div>
-      <section className="rounded-2xl border border-[#2a3933] bg-[#18201d] p-4"><h2 className="font-bold">سجل التوزيع</h2><p className="mt-1 text-xs text-[#98aaa2]">كل دفعة محفوظة باسم الشخص والملف وتاريخ الحجز.</p><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{data?.allocations.map((item) => <div key={item.id} className="rounded-xl border border-[#34453c] bg-[#111716] p-3"><div className="font-semibold">{item.personName}</div><div className="mt-1 truncate text-xs text-[#98aaa2]">{item.fileName || data.files.find((file) => file.id === item.fileId)?.name || 'ملف أرقام'} · {item.count} رقم</div><div className="mt-1 text-xs text-[#98aaa2]">{new Date(item.createdAt).toLocaleString('ar-JO')}</div><div className="mt-3 flex flex-wrap gap-3"><button type="button" disabled={busy} onClick={() => void prepareMessage(item)} className="inline-flex items-center gap-1.5 text-xs font-bold text-[#21c063] hover:underline disabled:opacity-50"><MessageSquare className="h-4 w-4" />تجهيز رسالة الأرقام</button><a href={`/api/whatsapp/number-center?download=${encodeURIComponent(item.id)}`} className="inline-flex items-center gap-1.5 text-xs font-bold text-[#98aaa2] hover:underline"><Download className="h-4 w-4" />تنزيل الأرقام</a></div></div>)}{data && !data.allocations.length && <p className="text-sm text-[#98aaa2]">لم تُحجز أرقام بعد.</p>}</div></section>
+      {preview && <section id="number-batch-preview" className="rounded-2xl border border-[#21c063]/50 bg-[#18201d] p-4" aria-label="مراجعة دفعة الأرقام">
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-bold">مراجعة أرقام فرع {preview.branchName}</h2><p className="mt-1 text-sm text-[#98aaa2]">من ملف {preview.fileName} · {preview.allocations.length} أشخاص · رسالة واحدة لكل شخص، كل رقم في سطر.</p></div><div className="flex gap-2">{(!preview.dispatch || preview.dispatch.status === 'paused' || (preview.dispatch.status === 'running' && !preview.active)) && <button type="button" disabled={busy} onClick={() => void batchAction('send_batch')} className="inline-flex items-center gap-2 rounded-lg bg-[#21c063] px-4 py-2 text-sm font-bold text-[#092116] disabled:opacity-50"><Send className="h-4 w-4" />{preview.dispatch ? 'متابعة الإرسال' : 'تأكيد وإرسال للجميع'}</button>}{preview.dispatch && ['running', 'paused'].includes(preview.dispatch.status) && <button type="button" disabled={busy} onClick={() => void batchAction('cancel_batch')} className="rounded-lg border border-rose-500/40 px-3 py-2 text-sm text-rose-300 disabled:opacity-50">إيقاف المتبقي</button>}</div></div>
+        {preview.dispatch && <p role="status" className="mt-3 text-sm text-[#98aaa2]">{preview.dispatch.status === 'running' ? 'جارٍ الإرسال' : preview.dispatch.status === 'paused' ? 'توقف مؤقتًا بسبب انقطاع واتساب' : preview.dispatch.status === 'canceled' ? 'أُلغي إرسال المتبقي' : 'اكتمل الإرسال'} · تم {preview.dispatch.items.filter((item) => item.status === 'sent').length} من {preview.allocations.length}{preview.dispatch.items.some((item) => item.status === 'failed' || item.status === 'uncertain') ? ' · راجع العناصر التي تعذرت أو لم تتأكد' : ''}</p>}
+        <div className="mt-4 grid gap-3 md:grid-cols-2">{preview.allocations.map((item) => { const state = preview.dispatch?.items.find((entry) => entry.allocationId === item.id); return <div key={item.id} className="rounded-xl border border-[#34453c] bg-[#111716] p-3"><div className="flex items-center justify-between gap-2"><strong className="text-sm">{item.personName}</strong><span className="text-xs text-[#98aaa2]">{state?.status === 'sent' ? 'تم الإرسال' : state?.status === 'sending' ? 'جارٍ الإرسال' : state?.status === 'failed' ? 'تعذر الإرسال' : state?.status === 'uncertain' ? 'يحتاج مراجعة' : 'بانتظار الإرسال'}</span></div><p className="mt-1 text-xs text-[#98aaa2]">{item.count} رقم في رسالة واحدة</p><pre dir="ltr" className="mt-2 max-h-44 overflow-y-auto whitespace-pre-wrap break-all rounded-lg bg-[#1d2a23] p-3 text-left text-sm leading-6 text-[#f5f7f6]">{item.text}</pre>{state?.error && <p className="mt-2 text-xs text-rose-300">{state.error}</p>}</div>; })}</div>
+      </section>}
+      <section className="rounded-2xl border border-[#2a3933] bg-[#18201d] p-4"><h2 className="font-bold">سجل التوزيع</h2><p className="mt-1 text-xs text-[#98aaa2]">كل دفعة محفوظة باسم الشخص والملف وتاريخ الحجز.</p><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{data?.allocations.map((item) => <div key={item.id} className="rounded-xl border border-[#34453c] bg-[#111716] p-3"><div className="font-semibold">{item.personName}</div><div className="mt-1 truncate text-xs text-[#98aaa2]">{item.fileName || data.files.find((file) => file.id === item.fileId)?.name || 'ملف أرقام'} · {item.count} رقم</div><div className="mt-1 text-xs text-[#98aaa2]">{new Date(item.createdAt).toLocaleString('ar-JO')}</div><div className="mt-3 flex flex-wrap gap-3">{item.batchId && <button type="button" onClick={() => { revealPreviewRef.current = true; if (previewBatchId === item.batchId) document.getElementById('number-batch-preview')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); else { setPreview(null); setPreviewBatchId(item.batchId || ''); } }} className="inline-flex items-center gap-1.5 text-xs font-bold text-[#21c063] hover:underline">مراجعة الدفعة</button>}<button type="button" disabled={busy} onClick={() => void prepareMessage(item)} className="inline-flex items-center gap-1.5 text-xs font-bold text-[#21c063] hover:underline disabled:opacity-50"><MessageSquare className="h-4 w-4" />تجهيز رسالة الأرقام</button><a href={`/api/whatsapp/number-center?download=${encodeURIComponent(item.id)}`} className="inline-flex items-center gap-1.5 text-xs font-bold text-[#98aaa2] hover:underline"><Download className="h-4 w-4" />تنزيل الأرقام</a></div></div>)}{data && !data.allocations.length && <p className="text-sm text-[#98aaa2]">لم تُحجز أرقام بعد.</p>}</div></section>
       {editingBranch && <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/75 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditingBranchId(''); }}><div role="dialog" aria-modal="true" aria-label={`تعديل فرع ${editingBranch.name}`} className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl border border-[#3b5445] bg-[#18201d] p-5 shadow-2xl"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold text-[#21c063]">قائمة الفرع</p><h2 className="mt-1 text-xl font-bold">{editingBranch.name}</h2></div><button type="button" onClick={() => setEditingBranchId('')} aria-label="إغلاق" className="rounded-lg p-1 text-[#98aaa2] hover:bg-white/10"><X className="h-5 w-5" /></button></div>
         {error && <p role="alert" className="mt-3 rounded-lg bg-rose-500/10 p-2 text-xs text-rose-300">{error}</p>}
         <form onSubmit={(event) => { event.preventDefault(); void branchAction({ action: 'rename_branch', branchId: editingBranch.id, name: branchName }); }} className="mt-4 flex gap-2"><input required maxLength={80} value={branchName} onChange={(event) => setBranchName(event.target.value)} aria-label="اسم الفرع" className="min-w-0 flex-1 rounded-lg border border-[#34453c] bg-[#111716] px-3 py-2 text-sm outline-none focus:border-[#21c063]" /><button disabled={busy || branchName.trim() === editingBranch.name} className="rounded-lg border border-[#3b5445] px-3 py-2 text-xs font-bold disabled:opacity-50">حفظ الاسم</button></form>
