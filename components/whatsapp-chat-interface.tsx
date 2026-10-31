@@ -4537,6 +4537,7 @@ export function WhatsAppChatInterface({
       // تجاهل
     }
   };
+  const fullSearchLoadInFlightRef = useRef(false);
 
   const fetchWaStatus = async () => {
     try {
@@ -4574,8 +4575,6 @@ export function WhatsAppChatInterface({
     let isSubscribed = true;
     let lastResumeAt = Date.now();
     let lastAutoReconnectAt = 0;
-    let fullRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-    let initialFullLoadTimer: ReturnType<typeof setTimeout> | null = null;
 
     const closeSSE = () => {
       if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -4614,12 +4613,6 @@ export function WhatsAppChatInterface({
       // Reload the server snapshot so messages received meanwhile appear immediately.
       const snapshotAt = lastMessageSnapshotAtRef.current;
       void fetchMessages(true, snapshotAt ? Math.max(1, snapshotAt - 5 * 60_000) : undefined);
-      if (Date.now() - lastFullMessageSyncAtRef.current > 10 * 60_000) {
-        if (fullRefreshTimer) clearTimeout(fullRefreshTimer);
-        fullRefreshTimer = setTimeout(() => {
-          if (isSubscribed && !document.hidden) void fetchMessages(true);
-        }, 15_000);
-      }
       void refreshStatusAndMaybeReconnect();
     };
 
@@ -4854,28 +4847,20 @@ export function WhatsAppChatInterface({
         es.onerror = () => {
           closeSSE();
           if (isSubscribed && !document.hidden) {
-            reconnectTimer = setTimeout(connectSSE, 4000);
+            reconnectTimer = setTimeout(connectSSE, 1500);
           }
         };
       } catch {
         if (isSubscribed && !document.hidden) {
-          reconnectTimer = setTimeout(connectSSE, 4000);
+          reconnectTimer = setTimeout(connectSSE, 1500);
         }
       }
     };
 
     connectSSE();
     void refreshStatusAndMaybeReconnect();
-    // Populate the list first. On mobile, leave the network free for the chat the user opens
-    // before requesting the much larger complete archive in the background.
-    void (async () => {
-      await fetchMessages(true, undefined, true);
-      if (!isSubscribed) return;
-      const mobile = window.matchMedia('(max-width: 767px)').matches;
-      initialFullLoadTimer = setTimeout(() => {
-        if (isSubscribed && !document.hidden) void fetchMessages();
-      }, mobile ? 20_000 : 0);
-    })();
+    // تحميل ملخص المحادثات فقط؛ سجل المحادثة يُجلب عند فتحها والبحث العام عند طلبه.
+    void fetchMessages(true, undefined, true);
 
     const onResume = () => {
       if (document.hidden || Date.now() - lastResumeAt < 1500) return;
@@ -4903,13 +4888,14 @@ export function WhatsAppChatInterface({
     window.addEventListener('online', onOnline);
     window.addEventListener('pageshow', onPageShow);
 
-    // فحص احتياطي بطيء كل 60 ثانية فقط في حال انقطع اتصال SSE وكان التبويب نشطاً
+    // فحص احتياطي خفيف إذا انقطع اتصال الأحداث المباشر.
     const fallbackInterval = setInterval(() => {
       if (!es && typeof document !== 'undefined' && !document.hidden) {
-        fetchMessages();
-        fetchWaStatus();
+        const snapshotAt = lastMessageSnapshotAtRef.current;
+        void fetchMessages(true, snapshotAt ? Math.max(1, snapshotAt - 5 * 60_000) : undefined, !snapshotAt);
+        void fetchWaStatus();
       }
-    }, 60000);
+    }, 10000);
 
     return () => {
       isSubscribed = false;
@@ -4918,11 +4904,19 @@ export function WhatsAppChatInterface({
       window.removeEventListener('online', onOnline);
       window.removeEventListener('pageshow', onPageShow);
       clearInterval(fallbackInterval);
-      if (fullRefreshTimer) clearTimeout(fullRefreshTimer);
-      if (initialFullLoadTimer) clearTimeout(initialFullLoadTimer);
       closeSSE();
     };
   }, []);
+
+  useEffect(() => {
+    if (searchQuery.trim().length < 2 || lastFullMessageSyncAtRef.current || fullSearchLoadInFlightRef.current) return;
+    const timer = window.setTimeout(() => {
+      if (fullSearchLoadInFlightRef.current || lastFullMessageSyncAtRef.current) return;
+      fullSearchLoadInFlightRef.current = true;
+      void fetchMessages(true).finally(() => { fullSearchLoadInFlightRef.current = false; });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
 
   const handleClearDemoMessages = async () => {
     setIsClearingDemo(true);
