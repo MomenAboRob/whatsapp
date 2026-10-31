@@ -87,6 +87,7 @@ export interface WorkspaceData {
 const schedulerKeys = new Set<string>();
 const busyKeys = new Set<string>();
 const scannedFingerprints = new Map<string, string>();
+const notifiedOutgoingIds = new Set<string>();
 
 const cleanUserId = (userId: string) => userId.replace(/[^a-zA-Z0-9_-]/g, '_');
 const dataPath = (userId: string) => path.join(process.cwd(), 'whatsapp_auth', `user_${cleanUserId(userId)}`, 'workspace.json');
@@ -252,6 +253,33 @@ function smtpTransport(settings: WorkspaceSettings) {
     auth: { user: user!, pass: password! },
   });
   return { transporter, user, custom };
+}
+
+/** Notify the account owner after a WhatsApp send succeeds. Never sends to chat recipients. */
+export async function notifyOutgoingMessage(wa: WhatsAppManager, message: ChatMessage): Promise<void> {
+  if (!message.isFromMe || !message.id || notifiedOutgoingIds.has(message.id)) return;
+  const settings = readWorkspace(wa.userId).settings;
+  if (!settings.emailEnabled || !settings.emailTo || !smtpConfigured(settings)) return;
+  notifiedOutgoingIds.add(message.id);
+  try {
+    const { transporter, user, custom } = smtpTransport(settings);
+    const chat = message.chatName || 'محادثة واتساب';
+    const preview = (message.text || (message.hasMedia ? 'رسالة وسائط' : 'رسالة')).slice(0, 500);
+    const escape = (value: string) => value.replace(/[&<>"']/g, (char) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[char] || char);
+    const appUrl = process.env.APP_PUBLIC_URL || '';
+    await transporter.sendMail({
+      from: custom ? user : process.env.SMTP_FROM || user,
+      to: settings.emailTo,
+      subject: `تم إرسال رسالة واتساب إلى ${chat}`,
+      text: `تم إرسال رسالة إلى ${chat}.\n\n${preview}\n\n${appUrl}`,
+      html: `<div dir="rtl" style="font-family:Arial,Tahoma,sans-serif;background:#f0f2f5;padding:24px;color:#111b21"><div style="max-width:520px;margin:auto;background:#fff;border-radius:16px;overflow:hidden"><div style="background:#075e54;color:#fff;padding:20px;font-size:20px;font-weight:bold">تم إرسال رسالة واتساب</div><div style="padding:22px"><p>المحادثة: <strong>${escape(chat)}</strong></p><div style="background:#d9fdd3;border-radius:12px;padding:16px;white-space:pre-wrap;line-height:1.8">${escape(preview)}</div>${appUrl ? `<p><a href="${escape(appUrl)}" style="color:#075e54;font-weight:bold">افتح التطبيق</a></p>` : ''}</div></div></div>`,
+    });
+  } catch (error) {
+    notifiedOutgoingIds.delete(message.id);
+    console.warn('تعذر إرسال تنبيه الرسالة الصادرة إلى البريد:', error);
+  }
 }
 
 export async function verifySmtp(settings: WorkspaceSettings): Promise<void> {

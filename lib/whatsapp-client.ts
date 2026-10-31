@@ -276,6 +276,13 @@ export class WhatsAppManager {
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private instanceId: string = Math.random().toString(36).substring(2, 9);
 
+  private emitOutgoingMessage(message: ChatMessage): void {
+    this.events.emit('message', message);
+    void import('@/lib/whatsapp-workspace')
+      .then(({ notifyOutgoingMessage }) => notifyOutgoingMessage(this, message))
+      .catch((error) => console.warn('تعذر تجهيز تنبيه الرسالة الصادرة:', error));
+  }
+
   private acquireLock(): boolean {
     try {
       if (fs.existsSync(this.lockFilePath)) {
@@ -3908,6 +3915,7 @@ export class WhatsAppManager {
             senderName: 'أنا',
           };
           this.persistData();
+          this.emitOutgoingMessage(this.incomingMessages[existingIdx]);
           return {
             success: true,
             message: `تم إرسال الرسالة إلى (${groupName}) بنجاح عبر واتساب.`,
@@ -3972,7 +3980,7 @@ export class WhatsAppManager {
         this.incomingMessages.unshift(newSentMessage);
       }
       this.persistData();
-      this.events.emit('message', this.incomingMessages.find((m) => m.id === msgId) || newSentMessage);
+      this.emitOutgoingMessage(this.incomingMessages.find((m) => m.id === msgId) || newSentMessage);
 
       return {
         success: true,
@@ -4107,7 +4115,7 @@ export class WhatsAppManager {
       }
 
       this.persistData();
-      this.events.emit('message', this.incomingMessages.find((m) => m.id === textMsgId) || forwardedText);
+      this.emitOutgoingMessage(this.incomingMessages.find((m) => m.id === textMsgId) || forwardedText);
 
       return {
         success: true,
@@ -4172,7 +4180,7 @@ export class WhatsAppManager {
           this.incomingMessages.unshift(forwarded);
         }
         this.persistData();
-        this.events.emit('message', this.incomingMessages.find((m) => m.id === msgId) || forwarded);
+        this.emitOutgoingMessage(this.incomingMessages.find((m) => m.id === msgId) || forwarded);
 
         return {
           success: true,
@@ -4606,7 +4614,7 @@ export class WhatsAppManager {
         this.incomingMessages.unshift(newSentMessage);
       }
       this.persistData();
-      this.events.emit('message', this.incomingMessages.find((m) => m.id === msgId) || newSentMessage);
+      this.emitOutgoingMessage(this.incomingMessages.find((m) => m.id === msgId) || newSentMessage);
 
       return {
         success: true,
