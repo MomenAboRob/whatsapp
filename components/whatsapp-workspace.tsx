@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
-import { AlertCircle, ArrowRight, Bell, CalendarClock, Check, Clock3, ListPlus, Loader2, Paperclip, Search, Send, Star, Trash2, Users, X } from 'lucide-react';
-import type { MentionItem, RecipientList, ScheduledMessage, WorkspaceSettings } from '@/lib/whatsapp-workspace';
+import { AlertCircle, ArrowRight, Bell, CalendarClock, Check, CheckCircle2, Clock3, ListPlus, Loader2, Paperclip, Pencil, Search, Send, Star, Trash2, Users, X } from 'lucide-react';
+import type { MentionItem, MessageTask, RecipientList, ScheduledMessage, TaskDetails, WorkspaceSettings } from '@/lib/whatsapp-workspace';
 
 type DirectChat = { id: string; name: string; phone?: string; avatarUrl?: string };
 type Snapshot = {
   mentions: MentionItem[];
+  messageTasks: MessageTask[];
   recipientLists: RecipientList[];
   schedules: ScheduledMessage[];
   settings: WorkspaceSettings;
@@ -26,13 +27,18 @@ const inputDate = (value: string) => {
   return local.toISOString().slice(0, 16);
 };
 
+type TaskEntry = { id: string; chatJid: string; chatName: string; sender: string; text: string; task: TaskDetails };
+type TaskDraft = { source: 'mention' | 'message' | 'edit'; id: string; chatName: string; text: string; task?: TaskDetails };
+
 export function WhatsAppWorkspace({
-  view, initialText = '', initialTarget = '', onOpenChat,
+  view, initialText = '', initialTarget = '', initialTask, onOpenChat, onTaskDraftConsumed,
 }: {
   view: 'dashboard' | 'compose';
   initialText?: string;
   initialTarget?: string;
+  initialTask?: { id: string; chatName: string; text: string } | null;
   onOpenChat: (chatJid: string) => void;
+  onTaskDraftConsumed?: () => void;
 }) {
   const [data, setData] = useState<Snapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -45,8 +51,9 @@ export function WhatsAppWorkspace({
   const [listName, setListName] = useState('');
   const [confirmSend, setConfirmSend] = useState(false);
   const [sendResult, setSendResult] = useState('');
-  const [taskDates, setTaskDates] = useState<Record<string, string>>({});
-  const [taskTitles, setTaskTitles] = useState<Record<string, string>>({});
+  const [taskDraft, setTaskDraft] = useState<TaskDraft | null>(initialTask ? { ...initialTask, source: 'message' } : null);
+  const [taskForm, setTaskForm] = useState({ title: '', notes: '', dueAt: '' });
+  const [taskError, setTaskError] = useState('');
   const [visibleMentions, setVisibleMentions] = useState(100);
   const [visibleContacts, setVisibleContacts] = useState(100);
   const sendRequestId = useRef('');
@@ -89,8 +96,33 @@ export function WhatsAppWorkspace({
     finally { setBusy(''); }
   };
 
-  const tasks = useMemo(() => data?.mentions.filter((item) => item.decision === 'important' && item.task) || [], [data]);
+  const tasks = useMemo<TaskEntry[]>(() => [
+    ...(data?.mentions || []).filter((item) => item.decision === 'important' && item.task).map((item) => ({ ...item, task: item.task! })),
+    ...(data?.messageTasks || []),
+  ], [data]);
   const pending = useMemo(() => data?.mentions.filter((item) => item.decision === 'new') || [], [data]);
+  const openTasks = useMemo(() => tasks.filter((item) => item.task.status === 'open').sort((a, b) => (a.task.dueAt || '9').localeCompare(b.task.dueAt || '9')), [tasks]);
+  const doneTasks = useMemo(() => tasks.filter((item) => item.task.status === 'done').sort((a, b) => (b.task.completedAt || '').localeCompare(a.task.completedAt || '')), [tasks]);
+
+  const openTaskEditor = (draft: TaskDraft) => {
+    setTaskDraft(draft);
+    setTaskForm({ title: draft.task?.title || '', notes: draft.task?.notes || '', dueAt: inputDate(draft.task?.dueAt || '') });
+    setTaskError('');
+  };
+  const closeTaskEditor = () => { setTaskDraft(null); setTaskError(''); onTaskDraftConsumed?.(); };
+  const saveTask = async () => {
+    if (!taskDraft) return;
+    if (!taskForm.title.trim()) { setTaskError('اكتب نوع المهمة'); return; }
+    if (!taskForm.dueAt || !Number.isFinite(new Date(taskForm.dueAt).getTime())) { setTaskError('اختر موعد التسليم'); return; }
+    setBusy('task'); setTaskError('');
+    try {
+      await post({ action: taskDraft.source === 'edit' ? 'update_task' : 'create_task',
+        source: taskDraft.source, id: taskDraft.id, title: taskForm.title.trim(), notes: taskForm.notes.trim(), dueAt: new Date(taskForm.dueAt).toISOString() });
+      await refresh();
+      closeTaskEditor();
+    } catch (err) { setTaskError(err instanceof Error ? err.message : 'تعذر حفظ المهمة'); }
+    finally { setBusy(''); }
+  };
   const directChats = useMemo(() => (data?.directChats || []).filter((chat) =>
     (chat.name + ' ' + (chat.phone || '')).toLowerCase().includes(search.toLowerCase().trim())
   ), [data, search]);
@@ -149,7 +181,7 @@ export function WhatsAppWorkspace({
 
   return (
     <div dir="rtl" className="h-full overflow-y-auto bg-[#111716] px-4 py-5 text-[#f5f7f6] sm:px-7">
-      <div className="mx-auto max-w-6xl">
+      <div className={`mx-auto ${view === 'dashboard' ? 'max-w-[1700px]' : 'max-w-6xl'}`}>
         <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="mb-1 text-xs font-semibold text-[#21c063]">{view === 'dashboard' ? 'المتابعة اليومية' : 'مركز الرسائل'}</div>
@@ -167,14 +199,15 @@ export function WhatsAppWorkspace({
           <div className="space-y-6">
             <div className="grid gap-3 sm:grid-cols-3">
               <Summary icon={Bell} label="منشنات بانتظار قرارك" value={pending.length} />
-              <Summary icon={Star} label="مهام مفتوحة" value={tasks.filter((item) => item.task?.status === 'open').length} />
-              <Summary icon={CalendarClock} label="رسائل مجدولة" value={data?.schedules.filter((item) => item.status === 'pending').length || 0} />
+              <Summary icon={Star} label="مهام مفتوحة" value={openTasks.length} />
+              <Summary icon={CheckCircle2} label="مهام منجزة" value={doneTasks.length} />
             </div>
-            <section>
-              <SectionTitle title="المنشنات" subtitle="اختر «مهم» لإنشاء مهمة، أو «غير مهم» لإخفائه من قائمة المتابعة." />
-              <div className="grid gap-3">
-                {(data?.mentions || []).slice(0, visibleMentions).map((item) => (
-                  <article key={item.id} className={`rounded-2xl border p-4 ${item.decision === 'new' ? 'border-emerald-500/25 bg-[#192520]' : 'border-[#2a3933] bg-[#18201d]'}`}>
+            <div className="grid min-h-0 gap-4 xl:grid-cols-3">
+              <section className="min-w-0 rounded-2xl border border-[#2a3933] bg-[#141d19] p-3 sm:p-4">
+                <SectionTitle title={`المنشنات · ${pending.length}`} subtitle="المنشنات التي لم تصنفها بعد" />
+                <div className="grid gap-3 xl:max-h-[calc(100dvh-280px)] xl:overflow-y-auto xl:pl-1">
+                {pending.slice(0, visibleMentions).map((item) => (
+                  <article key={item.id} className="rounded-xl border border-emerald-500/20 bg-[#192520] p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex min-w-0 items-center gap-2"><span className="font-bold">{item.chatName}</span><span className="text-xs text-[#8da198]">· {item.sender}</span></div>
                       <time className="text-xs text-[#8da198]">{dateLabel(item.timestampMs)}</time>
@@ -183,37 +216,36 @@ export function WhatsAppWorkspace({
                     {item.emailError && <p className="mt-2 text-xs text-rose-300">تعذر إرسال تنبيه البريد: {item.emailError}</p>}
                     <div className="mt-3 flex flex-wrap gap-2">
                       <SmallButton onClick={() => onOpenChat(item.chatJid)}><ArrowRight className="h-3.5 w-3.5" />فتح المحادثة</SmallButton>
-                      {item.decision !== 'important' && <SmallButton active onClick={() => void act(item.id, { action: 'update_mention', id: item.id, decision: 'important' })} disabled={busy === item.id}><Star className="h-3.5 w-3.5" />مهم، أنشئ مهمة</SmallButton>}
-                      {item.decision !== 'dismissed' && <SmallButton onClick={() => void act(item.id, { action: 'update_mention', id: item.id, decision: 'dismissed' })} disabled={busy === item.id}>غير مهم</SmallButton>}
-                      {item.decision === 'dismissed' && <span className="self-center text-xs text-[#8da198]">غير مهم</span>}
+                      <SmallButton active onClick={() => openTaskEditor({ source: 'mention', id: item.id, chatName: item.chatName, text: item.text })}><Star className="h-3.5 w-3.5" />إنشاء مهمة</SmallButton>
+                      <SmallButton onClick={() => void act(item.id, { action: 'update_mention', id: item.id, decision: 'dismissed' })} disabled={busy === item.id}>غير مهتم</SmallButton>
                     </div>
                   </article>
                 ))}
-                {(data?.mentions.length || 0) > visibleMentions && <button type="button" onClick={() => setVisibleMentions((count) => count + 100)} className="rounded-xl border border-[#34453c] bg-[#18201d] p-3 text-sm font-semibold text-[#21c063] hover:bg-[#203328]">عرض المزيد من المنشنات ({(data?.mentions.length || 0) - visibleMentions} متبقية)</button>}
-                {!data?.mentions.length && <Empty text="ما وصل أي منشن لك بعد. ستظهر المنشنات هنا تلقائيًا عند وصولها." />}
+                {pending.length > visibleMentions && <button type="button" onClick={() => setVisibleMentions((count) => count + 100)} className="rounded-xl border border-[#34453c] bg-[#18201d] p-3 text-sm font-semibold text-[#21c063] hover:bg-[#203328]">عرض المزيد ({pending.length - visibleMentions} متبقية)</button>}
+                {!pending.length && <Empty text="لا توجد منشنات بانتظار قرارك." />}
               </div>
             </section>
-            <section>
-              <SectionTitle title="مهامي" subtitle="المهام المهمة تبقى هنا حتى تنهيها. يمكنك تحديد موعد التسليم أو تغييره." />
-              <div className="grid gap-3 md:grid-cols-2">
-                {tasks.map((item) => (
-                  <article key={item.id} className="rounded-2xl border border-[#2a3933] bg-[#18201d] p-4">
-                    <div className="flex items-start justify-between gap-3"><div className="min-w-0 flex-1"><div className="text-xs text-[#21c063]">{item.chatName}</div><input value={taskTitles[item.id] ?? item.task?.title ?? ''} onChange={(event) => setTaskTitles((prev) => ({ ...prev, [item.id]: event.target.value }))} aria-label="عنوان المهمة" className="mt-1 w-full border-b border-transparent bg-transparent font-bold outline-none focus:border-[#21c063]" /></div><span className={`rounded-full px-2 py-1 text-xs ${item.task?.status === 'done' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>{item.task?.status === 'done' ? 'منجزة' : 'مفتوحة'}</span></div>
-                    <p dir="auto" className="mt-2 line-clamp-2 text-xs text-[#a9bbb2]">{item.text}</p>
-                    <div className="mt-4 flex flex-wrap items-end gap-2">
-                      <label className="flex-1 text-xs text-[#a9bbb2]">موعد التسليم<input type="datetime-local" value={taskDates[item.id] ?? inputDate(item.task?.dueAt || '')} onChange={(event) => setTaskDates((prev) => ({ ...prev, [item.id]: event.target.value }))} className="mt-1 w-full rounded-lg border border-[#34453c] bg-[#111716] p-2 text-sm text-white" /></label>
-                      <SmallButton onClick={() => void act(item.id, { action: 'update_task', id: item.id, title: taskTitles[item.id] ?? item.task?.title, dueAt: taskDates[item.id] ? new Date(taskDates[item.id]).toISOString() : item.task?.dueAt || '' })} disabled={busy === item.id}>حفظ التفاصيل</SmallButton>
-                      <SmallButton active={item.task?.status !== 'done'} onClick={() => void act(item.id, { action: 'update_task', id: item.id, status: item.task?.status === 'done' ? 'open' : 'done' })}>{item.task?.status === 'done' ? 'إعادة فتح' : 'تم الإنجاز'}</SmallButton>
-                    </div>
-                    <div className="mt-3 flex items-center gap-2 text-xs">
-                      <label className="inline-flex cursor-pointer items-center gap-1.5 text-[#21c063]"><Paperclip className="h-3.5 w-3.5" />{item.task?.attachment ? 'استبدال الملف' : 'إرفاق ملف للمهمة'}<input type="file" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadTaskFile(item.id, file); event.target.value = ''; }} /></label>
-                      {item.task?.attachment && <a href={`/api/whatsapp/workspace/file?id=${encodeURIComponent(item.id)}`} className="truncate text-[#b8c8bc] underline">{item.task.attachment.name}</a>}
-                    </div>
-                  </article>
-                ))}
-                {!tasks.length && <Empty text="حدد منشنًا مهمًا ليظهر هنا كمهمة." />}
-              </div>
-            </section>
+              <section className="min-w-0 rounded-2xl border border-[#2a3933] bg-[#141d19] p-3 sm:p-4">
+                <SectionTitle title={`المهام · ${openTasks.length}`} subtitle="المهام التي تنتظر إنجازك" />
+                <div className="grid gap-3 xl:max-h-[calc(100dvh-280px)] xl:overflow-y-auto xl:pl-1">
+                  {openTasks.map((item) => <TaskCard key={item.id} item={item} onOpenChat={onOpenChat}
+                    onEdit={() => openTaskEditor({ source: 'edit', id: item.id, chatName: item.chatName, text: item.text, task: item.task })}
+                    onStatus={() => void act(item.id, { action: 'update_task', id: item.id, status: 'done' })}
+                    onUpload={(file) => void uploadTaskFile(item.id, file)} busy={busy === item.id} />)}
+                  {!openTasks.length && <Empty text="حوّل منشنًا أو رسالة إلى مهمة لتظهر هنا." />}
+                </div>
+              </section>
+              <section className="min-w-0 rounded-2xl border border-[#2a3933] bg-[#141d19] p-3 sm:p-4">
+                <SectionTitle title={`المهام المنجزة · ${doneTasks.length}`} subtitle="كل مهمة اكتملت تنتقل إلى هنا" />
+                <div className="grid gap-3 xl:max-h-[calc(100dvh-280px)] xl:overflow-y-auto xl:pl-1">
+                  {doneTasks.map((item) => <TaskCard key={item.id} item={item} onOpenChat={onOpenChat}
+                    onEdit={() => openTaskEditor({ source: 'edit', id: item.id, chatName: item.chatName, text: item.text, task: item.task })}
+                    onStatus={() => void act(item.id, { action: 'update_task', id: item.id, status: 'open' })}
+                    onUpload={(file) => void uploadTaskFile(item.id, file)} busy={busy === item.id} />)}
+                  {!doneTasks.length && <Empty text="ستظهر هنا المهام بعد الضغط على «تم الانتهاء»." />}
+                </div>
+              </section>
+            </div>
             <section>
               <SectionTitle title="الرسائل المجدولة" subtitle="تعرض مواعيد الإرسال وحالة كل رسالة." />
               <div className="grid gap-2">
@@ -263,6 +295,17 @@ export function WhatsAppWorkspace({
             {confirmSend && <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/75 p-4"><div className="w-full max-w-md rounded-2xl border border-[#3e5946] bg-[#17251d] p-5 shadow-2xl"><h2 className="text-lg font-bold">تأكيد الإرسال</h2><p className="mt-2 text-sm text-[#b6c7bc]">ستُرسل الرسالة الآن إلى {selected.length} جهات بشكل منفصل:</p><p className="mt-2 max-h-24 overflow-auto text-sm text-[#21c063]">{selectedNames.join('، ')}</p><div dir="auto" className="mt-3 max-h-32 overflow-auto whitespace-pre-wrap rounded-lg bg-[#101815] p-3 text-sm">{text}</div><div className="mt-5 flex gap-2"><SmallButton active onClick={() => void sendNow()} disabled={busy === 'send'}><Send className="h-4 w-4" />تأكيد وإرسال</SmallButton><SmallButton onClick={() => setConfirmSend(false)}>رجوع</SmallButton></div></div></div>}
           </div>
         )}
+        {view === 'dashboard' && taskDraft && <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/75 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) closeTaskEditor(); }}>
+          <form role="dialog" aria-modal="true" aria-label={taskDraft.source === 'edit' ? 'تعديل المهمة' : 'إنشاء مهمة'} onSubmit={(event) => { event.preventDefault(); void saveTask(); }} className="w-full max-w-lg rounded-2xl border border-[#3e5946] bg-[#17251d] p-5 text-right shadow-2xl sm:p-6">
+            <div className="flex items-start justify-between gap-3"><div><div className="text-xs font-semibold text-[#21c063]">{taskDraft.source === 'edit' ? 'تعديل المهمة' : 'مهمة جديدة'}</div><h2 className="mt-1 text-xl font-bold">{taskDraft.chatName}</h2></div><button type="button" onClick={closeTaskEditor} aria-label="إغلاق" className="rounded-lg p-1 text-[#a9bbb2] hover:bg-white/10"><X className="h-5 w-5" /></button></div>
+            <p dir="auto" className="mt-3 max-h-20 overflow-y-auto rounded-xl bg-[#101815] p-3 text-xs leading-5 text-[#a9bbb2]">{taskDraft.text || 'رسالة وسائط'}</p>
+            <label className="mt-4 block text-sm font-semibold">نوع المهمة <span className="text-emerald-300">*</span><input autoFocus required maxLength={160} value={taskForm.title} onChange={(event) => setTaskForm((form) => ({ ...form, title: event.target.value }))} placeholder="مثال: متابعة الطلب أو تجهيز الملف" className="mt-1.5 w-full rounded-xl border border-[#3b5445] bg-[#101815] px-3 py-2.5 text-sm font-normal outline-none focus:border-[#21c063]" /></label>
+            <label className="mt-4 block text-sm font-semibold">ملاحظات المهمة<textarea maxLength={4000} rows={4} value={taskForm.notes} onChange={(event) => setTaskForm((form) => ({ ...form, notes: event.target.value }))} placeholder="اكتب التفاصيل التي تحتاج تذكرها..." className="mt-1.5 w-full resize-y rounded-xl border border-[#3b5445] bg-[#101815] px-3 py-2.5 text-sm font-normal leading-6 outline-none focus:border-[#21c063]" /></label>
+            <label className="mt-4 block text-sm font-semibold">موعد التسليم <span className="text-emerald-300">*</span><input required type="datetime-local" value={taskForm.dueAt} onChange={(event) => setTaskForm((form) => ({ ...form, dueAt: event.target.value }))} className="mt-1.5 w-full rounded-xl border border-[#3b5445] bg-[#101815] px-3 py-2.5 text-sm font-normal outline-none focus:border-[#21c063]" /></label>
+            {taskError && <p className="mt-3 text-xs text-rose-300">{taskError}</p>}
+            <div className="mt-5 flex gap-2"><button type="submit" disabled={busy === 'task'} className="rounded-xl bg-[#21c063] px-4 py-2.5 text-sm font-bold text-[#092116] disabled:opacity-50">{busy === 'task' ? 'جاري الحفظ...' : taskDraft.source === 'edit' ? 'حفظ التعديلات' : 'إنشاء المهمة'}</button><SmallButton onClick={closeTaskEditor}>إلغاء</SmallButton></div>
+          </form>
+        </div>}
       </div>
     </div>
   );
@@ -279,4 +322,23 @@ function SmallButton({ children, onClick, disabled, active }: { children: React.
 }
 function Empty({ text }: { text: string }) {
   return <div className="rounded-xl border border-dashed border-[#34453c] p-6 text-center text-sm text-[#8da198]">{text}</div>;
+}
+function TaskCard({ item, onOpenChat, onEdit, onStatus, onUpload, busy }: {
+  item: TaskEntry;
+  onOpenChat: (jid: string) => void;
+  onEdit: () => void;
+  onStatus: () => void;
+  onUpload: (file: File) => void;
+  busy: boolean;
+}) {
+  const done = item.task.status === 'done';
+  return <article className={`rounded-xl border p-3 ${done ? 'border-[#34453c] bg-[#18201d]' : 'border-[#2f4938] bg-[#192520]'}`}>
+    <div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="truncate text-xs text-[#8da198]">{item.chatName}</div><h3 className="mt-1 break-words font-bold leading-6">{item.task.title}</h3></div><span className={`shrink-0 rounded-full px-2 py-1 text-[11px] ${done ? 'bg-emerald-500/15 text-emerald-300' : 'bg-[#263a2d] text-[#a8cfb3]'}`}>{done ? 'منجزة' : 'مفتوحة'}</span></div>
+    {item.task.notes && <p dir="auto" className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-[#d8e4db]">{item.task.notes}</p>}
+    <p dir="auto" className="mt-2 line-clamp-2 break-words text-xs leading-5 text-[#91a59a]">{item.text}</p>
+    <div className="mt-3 flex items-center gap-1.5 text-xs text-[#a9bbb2]"><Clock3 className="h-3.5 w-3.5" />التسليم: {dateLabel(item.task.dueAt)}</div>
+    {done && item.task.completedAt && <p className="mt-1 text-xs text-emerald-300">اكتملت: {dateLabel(item.task.completedAt)}</p>}
+    <div className="mt-3 flex flex-wrap gap-2"><SmallButton active={!done} onClick={onStatus} disabled={busy}>{done ? 'إعادة فتح' : 'تم الانتهاء'}</SmallButton><SmallButton onClick={onEdit}><Pencil className="h-3.5 w-3.5" />تعديل</SmallButton><SmallButton onClick={() => onOpenChat(item.chatJid)}><ArrowRight className="h-3.5 w-3.5" />المحادثة</SmallButton></div>
+    <div className="mt-3 flex min-w-0 items-center gap-2 text-xs"><label className="inline-flex shrink-0 cursor-pointer items-center gap-1 text-[#21c063]"><Paperclip className="h-3.5 w-3.5" />{item.task.attachment ? 'استبدال الملف' : 'إرفاق ملف'}<input type="file" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) onUpload(file); event.target.value = ''; }} /></label>{item.task.attachment && <a href={`/api/whatsapp/workspace/file?id=${encodeURIComponent(item.id)}`} className="min-w-0 truncate text-[#b8c8bc] underline">{item.task.attachment.name}</a>}</div>
+  </article>;
 }

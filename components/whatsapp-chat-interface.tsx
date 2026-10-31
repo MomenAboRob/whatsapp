@@ -138,6 +138,7 @@ interface WhatsAppChatInterfaceProps {
   onOpenQRModal: () => void;
   onOpenSettings?: () => void;
   onScheduleChat?: (chat: { id: string; name: string }, text: string) => void;
+  onCreateTask: (message: { id: string; chatJid?: string; chatName?: string; text?: string }) => void;
   onActiveChatChange?: (isOpen: boolean) => void;
   isPopoutMode?: boolean;
   initialChat?: string;
@@ -1087,6 +1088,7 @@ export function WhatsAppChatInterface({
   onOpenQRModal,
   onOpenSettings,
   onScheduleChat,
+  onCreateTask,
   onActiveChatChange,
   isPopoutMode = false,
   initialChat = '',
@@ -4956,15 +4958,6 @@ export function WhatsAppChatInterface({
     } finally {
       setIsSyncingChats(false);
     }
-  };
-
-  const handleToggleReceived = async (msg: any) => {
-    const st = { ...msg.status, ...(actionStatus[msg.id] || {}) };
-    const nextReceived = !st.isReceived;
-    await updateStatus(msg.id, {
-      isReceived: nextReceived,
-      forwardedTo: nextReceived ? 'تم الاستلام' : (st.forwardedTo?.includes('استلام') ? undefined : st.forwardedTo),
-    });
   };
 
   const handleToggleReceivedForSelected = async () => {
@@ -10780,13 +10773,11 @@ export function WhatsAppChatInterface({
                 )}
                 <button
                   type="button"
-                  onClick={run((m) => handleToggleReceived(m))}
+                  onClick={run((m) => onCreateTask(m))}
                   className="flex items-center gap-3 px-4 h-12 text-sm text-purple-300 border-t border-[#2e2f2f] active:bg-purple-500/10 cursor-pointer font-medium"
                 >
-                  <CheckCircle2 className="w-5 h-5 text-purple-400" />
-                  {Boolean(actionStatus[sheetMsg.id]?.isReceived || sheetMsg.status?.isReceived)
-                    ? 'إلغاء وسم تم الاستلام'
-                    : 'تحديد كـ تم الاستلام'}
+                  <Briefcase className="w-5 h-5 text-purple-400" />
+                  تحويل إلى مهمة
                 </button>
                 <button
                   type="button"
@@ -10921,21 +10912,17 @@ export function WhatsAppChatInterface({
             <span>رد</span>
           </button>
 
-          {/* خيار تحديد كـ تم الاستلام أو إلغاء الوسم */}
+          {/* فتح نموذج إنشاء مهمة من الرسالة */}
           <button
             onClick={() => {
               const m = contextMenu.msg;
               closeAllPopups();
-              handleToggleReceived(m);
+              onCreateTask(m);
             }}
             className="w-full text-right px-3.5 py-2 text-[13.5px] font-normal text-purple-300 hover:text-purple-200 hover:bg-[#182229] rounded-xl transition-colors flex items-center gap-3 cursor-pointer group"
           >
-            <CheckCircle2 className="w-4 h-4 text-purple-400 group-hover:text-purple-300 transition-colors shrink-0" />
-            <span>
-              {Boolean(actionStatus[contextMenu.msg.id]?.isReceived || contextMenu.msg.status?.isReceived)
-                ? 'إلغاء وسم تم الاستلام'
-                : 'تحديد كـ تم الاستلام'}
-            </span>
+            <Briefcase className="w-4 h-4 text-purple-400 group-hover:text-purple-300 transition-colors shrink-0" />
+            <span>تحويل إلى مهمة</span>
           </button>
 
           {/* خيار تحديد الرسالة (لبدء وضع التحديد وشبك الصور) */}

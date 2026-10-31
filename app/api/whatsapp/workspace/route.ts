@@ -57,8 +57,8 @@ export async function POST(req: NextRequest) {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return bad('طلب غير صالح');
     body = parsed as Record<string, unknown>;
   } catch { return bad('طلب غير صالح'); }
-  const data = readWorkspace(user.id);
   const action = String(body.action || '');
+  const data = action === 'create_task' ? scanMentions(wa) : readWorkspace(user.id);
 
   if (action === 'verify_smtp') {
     try {
@@ -67,6 +67,52 @@ export async function POST(req: NextRequest) {
     } catch (error) {
       return bad(error instanceof Error ? error.message.slice(0, 180) : 'تعذر الاتصال بخادم البريد');
     }
+  }
+
+  if (action === 'create_task') {
+    const title = String(body.title || '').trim().slice(0, 160);
+    const notes = String(body.notes || '').trim().slice(0, 4000);
+    if (!title) return bad('اكتب نوع المهمة');
+    const due = new Date(String(body.dueAt || ''));
+    if (!Number.isFinite(due.getTime())) return bad('اختر موعد التسليم');
+    const dueAt = due.toISOString();
+    const source = String(body.source || '');
+    const sourceId = String(body.id || '');
+    if (source === 'mention') {
+      const item = data.mentions.find((mention) => mention.id === sourceId);
+      if (!item) return bad('المنشن غير موجود', 404);
+      item.decision = 'important';
+      item.task = { ...item.task, title, notes, dueAt, status: item.task?.status || 'open' };
+      saveWorkspace(user.id, data);
+      return NextResponse.json({ success: true, task: item.task });
+    }
+    if (source === 'message') {
+      const message = wa.getMessages().find((item) => item.id === sourceId);
+      if (!message) return bad('الرسالة غير موجودة', 404);
+      const mention = data.mentions.find((item) => item.id === sourceId);
+      if (mention) {
+        const existingMessageTask = data.messageTasks.find((item) => item.messageId === sourceId);
+        mention.decision = 'important';
+        mention.task = { ...existingMessageTask?.task, ...mention.task, title, notes, dueAt, status: mention.task?.status || existingMessageTask?.task.status || 'open' };
+        data.messageTasks = data.messageTasks.filter((item) => item.messageId !== sourceId);
+        saveWorkspace(user.id, data);
+        return NextResponse.json({ success: true, task: mention.task });
+      }
+      const id = `message:${message.id}`;
+      const existing = data.messageTasks.find((item) => item.id === id);
+      if (existing) {
+        existing.task = { ...existing.task, title, notes, dueAt };
+      } else {
+        data.messageTasks.unshift({
+          id, messageId: message.id, chatJid: message.chatJid || '', chatName: message.chatName || 'محادثة',
+          sender: message.senderName || message.sender || 'عضو', text: message.text || 'رسالة وسائط',
+          timestampMs: message.timestampMs || Date.now(), task: { title, notes, dueAt, status: 'open' },
+        });
+      }
+      saveWorkspace(user.id, data);
+      return NextResponse.json({ success: true, task: existing?.task || data.messageTasks[0].task });
+    }
+    return bad('مصدر المهمة غير صالح');
   }
 
   if (action === 'update_mention') {
@@ -79,7 +125,7 @@ export async function POST(req: NextRequest) {
       const due = body.dueAt ? new Date(String(body.dueAt)) : null;
       if (due && !Number.isFinite(due.getTime())) return bad('موعد التسليم غير صالح');
       const dueAt = due?.toISOString() || item.task?.dueAt || '';
-      item.task = { title, dueAt, status: item.task?.status || 'open', attachment: item.task?.attachment };
+      item.task = { ...item.task, title, dueAt, status: item.task?.status || 'open' };
     } else {
       delete item.task;
     }
@@ -88,18 +134,23 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === 'update_task') {
-    const item = data.mentions.find((mention) => mention.id === body.id && mention.task);
-    if (!item?.task) return bad('المهمة غير موجودة', 404);
+    const task = data.mentions.find((mention) => mention.id === body.id)?.task ||
+      data.messageTasks.find((item) => item.id === body.id)?.task;
+    if (!task) return bad('المهمة غير موجودة', 404);
     if (body.status !== undefined && body.status !== 'open' && body.status !== 'done') return bad('حالة مهمة غير صالحة');
-    if (body.status) item.task.status = body.status;
-    if (body.title !== undefined) item.task.title = String(body.title).trim().slice(0, 160) || item.task.title;
+    if (body.status) {
+      task.status = body.status;
+      task.completedAt = body.status === 'done' ? new Date().toISOString() : undefined;
+    }
+    if (body.title !== undefined) task.title = String(body.title).trim().slice(0, 160) || task.title;
+    if (body.notes !== undefined) task.notes = String(body.notes).trim().slice(0, 4000);
     if (body.dueAt !== undefined) {
       const due = body.dueAt ? new Date(String(body.dueAt)) : null;
       if (due && !Number.isFinite(due.getTime())) return bad('موعد التسليم غير صالح');
-      item.task.dueAt = due?.toISOString() || '';
+      task.dueAt = due?.toISOString() || '';
     }
     saveWorkspace(user.id, data);
-    return NextResponse.json({ success: true, mention: item });
+    return NextResponse.json({ success: true, task });
   }
 
   if (action === 'settings') {

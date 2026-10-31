@@ -9,6 +9,15 @@ export type MentionDecision = 'new' | 'dismissed' | 'important';
 export type TaskStatus = 'open' | 'done';
 export type ScheduleStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'canceled';
 
+export interface TaskDetails {
+  title: string;
+  notes?: string;
+  dueAt: string;
+  status: TaskStatus;
+  attachment?: { name: string; size: number };
+  completedAt?: string;
+}
+
 export interface MentionItem {
   id: string;
   chatJid: string;
@@ -17,8 +26,19 @@ export interface MentionItem {
   text: string;
   timestampMs: number;
   decision: MentionDecision;
-  task?: { title: string; dueAt: string; status: TaskStatus; attachment?: { name: string; size: number } };
+  task?: TaskDetails;
   emailError?: string;
+}
+
+export interface MessageTask {
+  id: string;
+  messageId: string;
+  chatJid: string;
+  chatName: string;
+  sender: string;
+  text: string;
+  timestampMs: number;
+  task: TaskDetails;
 }
 
 export interface RecipientList {
@@ -50,6 +70,7 @@ export interface WorkspaceSettings {
 
 export interface WorkspaceData {
   mentions: MentionItem[];
+  messageTasks: MessageTask[];
   recipientLists: RecipientList[];
   schedules: ScheduledMessage[];
   settings: WorkspaceSettings;
@@ -63,6 +84,7 @@ const cleanUserId = (userId: string) => userId.replace(/[^a-zA-Z0-9_-]/g, '_');
 const dataPath = (userId: string) => path.join(process.cwd(), 'whatsapp_auth', `user_${cleanUserId(userId)}`, 'workspace.json');
 const initialData = (): WorkspaceData => ({
   mentions: [],
+  messageTasks: [],
   recipientLists: [],
   schedules: [],
   settings: { emailTo: '', emailEnabled: true, browserEnabled: true },
@@ -74,6 +96,7 @@ export function readWorkspace(userId: string): WorkspaceData {
     const defaults = initialData();
     return {
       mentions: Array.isArray(data.mentions) ? data.mentions : [],
+      messageTasks: Array.isArray(data.messageTasks) ? data.messageTasks : [],
       recipientLists: Array.isArray(data.recipientLists) ? data.recipientLists : [],
       schedules: Array.isArray(data.schedules) ? data.schedules : [],
       settings: { ...defaults.settings, ...(data.settings || {}) },

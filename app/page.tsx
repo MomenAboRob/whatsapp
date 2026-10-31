@@ -33,6 +33,8 @@ export default function HomePage() {
   const [composeTarget, setComposeTarget] = useState('');
   const [composeText, setComposeText] = useState('');
   const [composeRevision, setComposeRevision] = useState(0);
+  const [taskRevision, setTaskRevision] = useState(0);
+  const [taskMessage, setTaskMessage] = useState<{ id: string; chatName: string; text: string } | null>(null);
   const [newMentions, setNewMentions] = useState(0);
   const [currentUser, setCurrentUser] = useState<{ id: string; name: string; email: string } | null>(null);
   const [waStatus, setWaStatus] = useState<any>(null);
@@ -111,15 +113,26 @@ export default function HomePage() {
           onOpenQRModal={() => setIsQRModalOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onScheduleChat={(chat, text) => openCompose(chat.id, text)}
+          onCreateTask={(message) => {
+            if (popoutChat) {
+              window.history.replaceState(null, '', '/');
+              setPopoutChat(null);
+            }
+            setTaskMessage({ id: message.id, chatName: message.chatName || 'محادثة', text: message.text || 'رسالة وسائط' });
+            setTaskRevision((revision) => revision + 1);
+            setView('dashboard');
+          }}
         />
       </div>
       {!popoutChat && view !== 'whatsapp' && <div className="min-h-0 flex-1">
         <WhatsAppWorkspace
-          key={`${view}-${composeRevision}`}
+          key={`${view}-${composeRevision}-${taskRevision}`}
           view={view}
           initialTarget={composeTarget}
           initialText={composeText}
+          initialTask={taskMessage}
           onOpenChat={openChat}
+          onTaskDraftConsumed={() => setTaskMessage(null)}
         />
       </div>}
       {isQRModalOpen && (
