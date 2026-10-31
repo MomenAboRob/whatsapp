@@ -7,7 +7,7 @@
 export async function combineTwoImages(
   img1Url: string,
   img2Url: string,
-  label1 = 'بيانات الحوالة',
+  label1 = 'الصورة الأولى',
   label2 = 'صورة الوصل'
 ): Promise<string> {
   if (typeof window === 'undefined') return '';
@@ -67,7 +67,7 @@ export async function combineTwoImages(
     ctx.font = 'bold 15px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
     ctx.direction = 'rtl';
     ctx.textAlign = 'right';
-    ctx.fillText('حوالة وإيصال دفع مشبوكان معاً', totalWidth - padding, headerHeight - 10);
+    ctx.fillText('صور مدمجة', totalWidth - padding, headerHeight - 10);
 
     // بطاقة الصورة الأولى
     const x1 = totalWidth - padding - w1;
@@ -108,7 +108,7 @@ export async function combineTwoImages(
     ctx.fillStyle = '#7a7c7c';
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('نظام إدارة وتدقيق الحوالات الذكي', totalWidth / 2, totalHeight - 10);
+    ctx.fillText('واتساب', totalWidth / 2, totalHeight - 10);
   } else {
     // وضع رأسي (Stacked Top & Bottom)
     const targetWidth = 800;
@@ -131,7 +131,7 @@ export async function combineTwoImages(
     ctx.font = 'bold 15px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
     ctx.direction = 'rtl';
     ctx.textAlign = 'right';
-    ctx.fillText('حوالة وإيصال دفع مشبوكان معاً', totalWidth - padding, headerHeight - 10);
+    ctx.fillText('صور مدمجة', totalWidth - padding, headerHeight - 10);
 
     // الصورة الأولى (أعلى)
     const x1 = padding;
@@ -168,7 +168,7 @@ export async function combineTwoImages(
     ctx.fillStyle = '#7a7c7c';
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('نظام إدارة وتدقيق الحوالات الذكي', totalWidth / 2, totalHeight - 10);
+    ctx.fillText('واتساب', totalWidth / 2, totalHeight - 10);
   }
 
   return canvas.toDataURL('image/jpeg', 0.94);

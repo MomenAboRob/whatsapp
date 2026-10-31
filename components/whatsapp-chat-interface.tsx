@@ -3826,7 +3826,7 @@ export function WhatsAppChatInterface({
     }
     if (isBoth) {
       return (
-        <span title="تم استلام الحوالة ومسجلة في النظام" className="inline-flex items-center">
+        <span title="تم تسجيل الرسالة" className="inline-flex items-center">
           <CheckCheck className={`${sizeClass} text-emerald-400 stroke-[2.5]`} />
         </span>
       );
@@ -4354,7 +4354,7 @@ export function WhatsAppChatInterface({
       linkedMsgId: null,
       autoLinkSuppressed: true,
     });
-    toast.info('تم فك شبك صورة الوصل عن الحوالة.', 'فك الشبك');
+    toast.info('تم فك ربط الصورة عن الرسالة.', 'فك الربط');
   };
 
   useEffect(() => {
@@ -4386,7 +4386,7 @@ export function WhatsAppChatInterface({
       } catch (e) {}
       return updated;
     });
-    toast.info('تم فك القفل وإعادة تعيين حالة الحوالة بنجاح، يمكنك الآن تسجيلها مجدداً.', 'فك القفل');
+    toast.info('تم فك القفل وإعادة تعيين الحالة بنجاح.', 'فك القفل');
   };
 
   const fetchAirtableRecords = useCallback(async () => {
@@ -4401,7 +4401,7 @@ export function WhatsAppChatInterface({
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'sync_airtable_likes' }),
-          }).catch((error) => console.warn('تعذر مزامنة تفاعلات أيرتيبل:', error));
+          }).catch((error) => console.warn('تعذر مزامنة البيانات:', error));
         }
       }
     } catch (e) {}
@@ -5785,7 +5785,7 @@ export function WhatsAppChatInterface({
       if (res.ok && data.success) {
         await updateStatus(msg.id, { forwardedTo: 'حوالات تم رفعها' });
         toast.success(
-          `تم إرسال بيانات البوابة للمشترك (${parsed.participantName}) إلى مجموعة (حوالات تم رفعها) بنجاح`,
+          `تم إرسال بيانات المشترك (${parsed.participantName}) إلى المجموعة بنجاح`,
           'تم الإرسال للقروب'
         );
       } else {
@@ -5827,9 +5827,9 @@ export function WhatsAppChatInterface({
       const data = await res.json();
       if (res.ok && data.success) {
         await updateStatus(msg.id, { airtable: true, registered: true });
-        toast.success(`تم حفظ بيانات المتدرب (${parsed.participantName}) في أيرتيبل بنجاح`, 'أيرتيبل');
+        toast.success(`تم حفظ بيانات المتدرب (${parsed.participantName}) بنجاح`, 'تم الحفظ');
       } else {
-        toast.error(data.error || data.message || 'فشل الحفظ في أيرتيبل.', 'خطأ في أيرتيبل');
+        toast.error(data.error || data.message || 'تعذر حفظ البيانات.', 'خطأ في الحفظ');
       }
     } catch (e: any) {
       toast.error(`خطأ: ${e.message}`, 'خطأ في الاتصال');
@@ -5870,7 +5870,7 @@ export function WhatsAppChatInterface({
           forwardedTo: targetGroupName,
           ...(isRec ? { isReceived: true } : {}),
         });
-        toast.success(`تم توجيه الحوالة بنجاح إلى: ${targetGroupName}`, 'توجيه واتساب');
+        toast.success(`تم التوجيه بنجاح إلى: ${targetGroupName}`, 'توجيه واتساب');
       } else {
         toast.error(data.error || data.message || 'فشل التوجيه إلى واتساب.', 'خطأ في التوجيه');
       }
@@ -6957,14 +6957,14 @@ export function WhatsAppChatInterface({
 
     if (targetTexts.length === 1) {
       const parsed = parseTransferText(targetTexts[0].text, targetTexts[0]);
-      const name = parsed.participantName || 'الحوالة';
+      const name = parsed.participantName || 'الرسالة';
       toast.success(
-        `تم شبك صورة الوصل مع نص حوالة (${name}) بنجاح\nعند التسجيل في أيرتيبل أو التحويل سيتم حفظ وإرسال صورة الوصل مع الحوالة معاً.`,
+        `تم ربط الصورة مع الرسالة (${name}) بنجاح.`,
         'تم الشبك بنجاح'
       );
     } else {
       toast.success(
-        `تم شبك صورة الوصل بنجاح مع (${targetTexts.length}) حوالات نصية دفعة واحدة.\nستظل صورة الوصل مشبوكة بجميع هذه الحوالات وتنتقل معها عند التحويل لأي محادثة أخرى ومعتمدة في أيرتيبل.`,
+        `تم ربط الصورة مع (${targetTexts.length}) رسائل بنجاح.`,
         'تم الشبك بنجاح'
       );
     }
@@ -6996,7 +6996,7 @@ export function WhatsAppChatInterface({
         mediaType: 'image',
         fileName: `combined_${Date.now()}.jpg`,
         fileSize: Math.round(combinedDataUrl.length * 0.75),
-        caption: 'صورة موحدة مدمجة (حوالة + إيصال)',
+        caption: 'صورة موحدة مدمجة',
       });
 
       setIsSelectionMode(false);
@@ -7019,7 +7019,7 @@ export function WhatsAppChatInterface({
     setIsSelectionMode(false);
     setSelectedMsgIds([]);
     if (unlinkedCount > 0) {
-      toast.info(`تم فك شبك صورة الوصل عن (${unlinkedCount}) حوالة.`, 'فك الشبك');
+      toast.info(`تم فك ربط الصورة عن (${unlinkedCount}) رسالة.`, 'فك الربط');
     }
   };
 

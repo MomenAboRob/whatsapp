@@ -195,17 +195,17 @@ export const QuickRepliesModal = React.memo(function QuickRepliesModal({
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        className="max-w-3xl bg-[#161717] border border-[#2e2f2f] text-[#fafafa] p-0 overflow-hidden shadow-2xl rounded-2xl select-none"
+        className="w-[min(48rem,calc(100vw-2rem))] max-w-none sm:max-w-none grid-cols-[minmax(0,1fr)] gap-0 bg-[#161717] border border-[#2e2f2f] text-[#fafafa] p-0 overflow-hidden shadow-2xl rounded-2xl select-none"
         dir="rtl"
       >
         {/* رأس النافذة */}
-        <DialogHeader className="px-6 py-4 bg-[#242626] border-b border-[#2e2f2f] flex flex-row items-center justify-between">
-          <div className="flex items-center gap-3">
+        <DialogHeader className="min-w-0 px-4 sm:px-6 py-4 bg-[#242626] border-b border-[#2e2f2f] flex flex-col sm:flex-row items-start sm:items-center justify-between">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-[#21c063]/20 border border-[#21c063]/40 flex items-center justify-center text-[#21c063]">
               <Zap className="w-5 h-5 fill-[#21c063]" />
             </div>
-            <div className="text-right">
-              <DialogTitle className="text-base font-bold text-[#fafafa] flex items-center gap-2">
+            <div className="min-w-0 text-right">
+              <DialogTitle className="text-base font-bold text-[#fafafa] flex flex-wrap items-center gap-2">
                 <span>إدارة القوالب والردود السريعة</span>
                 <span className="text-xs font-normal text-[#a5a5a5] bg-[#161717] px-2 py-0.5 rounded-full">
                   اختصارات /
@@ -217,7 +217,7 @@ export const QuickRepliesModal = React.memo(function QuickRepliesModal({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2 sm:ml-8">
             {!isEditing && (
               <Button
                 size="sm"
@@ -233,7 +233,7 @@ export const QuickRepliesModal = React.memo(function QuickRepliesModal({
 
         {isEditing ? (
           /* نموذج إضافة / تعديل قالب */
-          <form onSubmit={handleSaveForm} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
+          <form onSubmit={handleSaveForm} className="min-w-0 p-4 sm:p-6 space-y-4 max-h-[75vh] overflow-y-auto">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-bold text-[#a5a5a5] mb-1.5">
@@ -369,10 +369,10 @@ export const QuickRepliesModal = React.memo(function QuickRepliesModal({
           </form>
         ) : (
           /* عرض قائمة القوالب وإدارتها */
-          <div className="p-6 space-y-4 max-h-[75vh] flex flex-col">
+          <div className="min-w-0 p-4 sm:p-6 space-y-4 max-h-[75vh] flex flex-col">
             {/* شريط البحث والتصنيفات */}
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-              <div className="relative w-full sm:w-72">
+            <div className="flex min-w-0 flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
+              <div className="relative min-w-0 w-full lg:w-64 lg:shrink-0">
                 <Search className="w-4 h-4 text-[#a5a5a5] absolute right-3 top-2.5" />
                 <input
                   type="text"
@@ -384,7 +384,7 @@ export const QuickRepliesModal = React.memo(function QuickRepliesModal({
               </div>
 
               {/* تبويبات الفئات */}
-              <div className="flex items-center gap-1 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0 scrollbar-none">
+              <div className="flex min-w-0 items-center gap-1 overflow-x-auto w-full pb-1 scrollbar-none">
                 <button
                   type="button"
                   onClick={() => setActiveTab('all')}
