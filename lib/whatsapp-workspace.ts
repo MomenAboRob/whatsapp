@@ -3,6 +3,7 @@ import path from 'path';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'crypto';
 import nodemailer from 'nodemailer';
 import type { ChatMessage, WhatsAppManager } from '@/lib/whatsapp-client';
+import { rawWhatsAppText } from '@/lib/whatsapp-message-text';
 
 export type MentionDecision = 'new' | 'dismissed' | 'important';
 export type TaskStatus = 'open' | 'done';
@@ -153,13 +154,14 @@ export function isMentionForMe(message: ChatMessage, wa: WhatsAppManager): boole
   });
 }
 
-function toMention(message: ChatMessage): MentionItem {
+function toMention(message: ChatMessage, wa: WhatsAppManager): MentionItem {
+  const original = rawWhatsAppText(message.rawBaileysMessage);
   return {
     id: message.id,
     chatJid: message.chatJid || '',
     chatName: message.chatName || 'مجموعة',
     sender: message.senderName || message.sender || 'عضو',
-    text: message.text || (message.hasMedia ? 'وسائط' : ''),
+    text: (original ? wa.decodeMentions(original) : message.text) || (message.hasMedia ? 'وسائط' : ''),
     timestampMs: message.timestampMs || Date.now(),
     decision: 'new',
   };
@@ -170,12 +172,27 @@ export function scanMentions(wa: WhatsAppManager): WorkspaceData {
   const messages = wa.getMessages();
   const fingerprint = `${wa.getStatus().user?.jid || ''}:${messages.length}:${messages[0]?.id || ''}`;
   if (scannedFingerprints.get(wa.userId) === fingerprint) return data;
-  const known = new Set(data.mentions.map((mention) => mention.id));
+  const known = new Map(data.mentions.map((mention) => [mention.id, mention]));
   let changed = false;
   for (const message of messages) {
-    if (known.has(message.id) || !isMentionForMe(message, wa)) continue;
-    data.mentions.push(toMention(message));
-    known.add(message.id);
+    const existing = known.get(message.id);
+    if (existing) {
+      const original = rawWhatsAppText(message.rawBaileysMessage);
+      if (original && existing.text.includes('(رسائلي)')) {
+        const cleanText = wa.decodeMentions(original);
+        if (cleanText !== existing.text) {
+          const oldText = existing.text;
+          existing.text = cleanText;
+          if (existing.task?.title === oldText.slice(0, 160)) existing.task.title = cleanText.slice(0, 160);
+          changed = true;
+        }
+      }
+      continue;
+    }
+    if (!isMentionForMe(message, wa)) continue;
+    const mention = toMention(message, wa);
+    data.mentions.push(mention);
+    known.set(message.id, mention);
     changed = true;
   }
   if (changed) {
@@ -224,7 +241,7 @@ export async function recordLiveMention(wa: WhatsAppManager, message: ChatMessag
   if (!isMentionForMe(message, wa)) return;
   const data = readWorkspace(wa.userId);
   if (data.mentions.some((item) => item.id === message.id)) return;
-  const mention = toMention(message);
+  const mention = toMention(message, wa);
   data.mentions.unshift(mention);
   data.mentions = data.mentions.slice(0, 3000);
   saveWorkspace(wa.userId, data);

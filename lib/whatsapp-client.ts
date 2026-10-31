@@ -5,6 +5,7 @@ import QRCode from 'qrcode';
 import { normalizeMessageContent } from '@whiskeysockets/baileys';
 import { getAuthUserFromRequest } from '@/lib/auth';
 import { recordLiveMention, startWorkspaceScheduler } from '@/lib/whatsapp-workspace';
+import { rawWhatsAppText } from '@/lib/whatsapp-message-text';
 
 const isConversationJid = (jid?: string) => !jid || (!jid.endsWith('@broadcast') && !jid.endsWith('@newsletter'));
 const isContactName = (value?: string): boolean => Boolean(value?.trim() && value !== 'null' && !/^[+\d\s().∙•*-]+$/.test(value.trim()));
@@ -665,8 +666,9 @@ export class WhatsAppManager {
     if (!text || typeof text !== 'string') return text;
     return text.replace(/@(\d{6,})/g, (match, id) => {
       const resolved = this.resolveRealContact(id);
-      if (resolved.contactName && !resolved.contactName.startsWith('+') && !resolved.contactName.startsWith('10')) {
-        return `@${resolved.contactName}`;
+      const mentionName = resolved.contactName?.replace(/(?:\s*\(رسائلي\))+$/gu, '').trim();
+      if (mentionName && !mentionName.startsWith('+') && !mentionName.startsWith('10')) {
+        return `@${mentionName}`;
       }
       if (resolved.formattedPhone) {
         return `@${resolved.formattedPhone}`;
@@ -1463,7 +1465,8 @@ export class WhatsAppManager {
 
       // فك شفرة المنشنز @ID داخل نص الرسالة
       if (m.text) {
-        m.text = this.decodeMentions(m.text);
+        const original = m.text.includes('(رسائلي)') ? rawWhatsAppText(m.rawBaileysMessage) : '';
+        m.text = this.decodeMentions(original && /@\d{6,}/.test(original) ? original : m.text);
       }
 
       if (!isGroup) {
