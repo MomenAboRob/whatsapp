@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserFromRequest } from '@/lib/auth';
 import { getWhatsAppManager } from '@/lib/whatsapp-client';
-import { addNumberBranchMember, addNumberFiles, allocateNumbers, createNumberBranch, deleteNumberBranch, deleteNumberFile, numberCenterSummary, readNumberCenter, removeNumberBranchMember, renameNumberBranch } from '@/lib/number-center';
+import { addNumberBranchMember, addNumberFiles, allocateNumbers, allocationMessageText, createNumberBranch, deleteNumberBranch, deleteNumberFile, numberCenterSummary, readNumberCenter, removeNumberBranchMember, renameNumberBranch } from '@/lib/number-center';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,11 +12,17 @@ export async function GET(req: NextRequest) {
   const user = getAuthUserFromRequest(req);
   if (!user) return bad('غير مصرح', 401);
   const data = readNumberCenter(user.id);
+  const draftId = req.nextUrl.searchParams.get('draft');
+  if (draftId) {
+    const allocation = data.allocations.find((item) => item.id === draftId);
+    if (!allocation) return bad('التوزيع غير موجود', 404);
+    return NextResponse.json({ success: true, text: allocationMessageText(allocation), personJid: allocation.personJid, personName: allocation.personName }, { headers: { 'Cache-Control': 'private, no-store' } });
+  }
   const downloadId = req.nextUrl.searchParams.get('download');
   if (downloadId) {
     const allocation = data.allocations.find((item) => item.id === downloadId);
     if (!allocation) return bad('التوزيع غير موجود', 404);
-    const body = `\uFEFF${allocation.numbers.join('\n')}\n`;
+    const body = `\uFEFF${allocationMessageText(allocation)}\n`;
     return new Response(body, { headers: {
       'Content-Type': 'text/plain; charset=utf-8',
       'Content-Disposition': `attachment; filename="numbers-${allocation.id}.txt"`,

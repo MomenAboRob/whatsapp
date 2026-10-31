@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Download, FileText, Loader2, Pencil, Plus, Search, Trash2, Upload, Users, X } from 'lucide-react';
+import { Download, FileText, Loader2, MessageSquare, Pencil, Plus, Search, Trash2, Upload, Users, X } from 'lucide-react';
 
 type FileSummary = { id: string; name: string; createdAt: string; total: number; remaining: number };
 type AllocationSummary = { id: string; fileId: string; fileName?: string; personJid: string; personName: string; count: number; createdAt: string };
@@ -9,7 +9,7 @@ type Contact = { id: string; name: string; phone?: string };
 type Branch = { id: string; name: string; members: Array<{ id: string; name: string }>; createdAt: string };
 type Snapshot = { files: FileSummary[]; allocations: AllocationSummary[]; contacts: Contact[]; branches: Branch[] };
 
-export function WhatsAppNumberCenter() {
+export function WhatsAppNumberCenter({ onPrepareMessage }: { onPrepareMessage: (target: string, text: string) => void }) {
   const [data, setData] = useState<Snapshot | null>(null);
   const [fileId, setFileId] = useState('');
   const [branchId, setBranchId] = useState('');
@@ -27,8 +27,8 @@ export function WhatsAppNumberCenter() {
     const json = await response.json();
     if (!response.ok) throw new Error(json.error || 'تعذر تحميل مركز الملفات');
     setData(json);
-    setFileId((current) => json.files.some((file: FileSummary) => file.id === current) ? current : (json.files[0]?.id || ''));
-    setBranchId((current) => json.branches.some((branch: Branch) => branch.id === current) ? current : (json.branches[0]?.id || ''));
+    setFileId((current) => json.files.some((file: FileSummary) => file.id === current) ? current : '');
+    setBranchId((current) => json.branches.some((branch: Branch) => branch.id === current) ? current : '');
   }, []);
   useEffect(() => { void refresh().catch((err) => setError(err.message)); }, [refresh]);
 
@@ -112,6 +112,17 @@ export function WhatsAppNumberCenter() {
     if (!window.confirm(`حذف فرع «${branch.name}»؟\nسجل توزيعات الأرقام السابقة سيبقى محفوظًا.`)) return;
     if (await branchAction({ action: 'delete_branch', branchId: branch.id })) setEditingBranchId('');
   };
+  const prepareMessage = async (allocation: AllocationSummary) => {
+    setBusy(true); setError('');
+    try {
+      const response = await fetch(`/api/whatsapp/number-center?draft=${encodeURIComponent(allocation.id)}`, { cache: 'no-store' });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.error || 'تعذر تجهيز الرسالة');
+      if (json.text.length > 4096) throw new Error('هذه الدفعة أطول من رسالة واتساب واحدة. نزّل الملف أو وزّع عددًا أقل في المرة القادمة.');
+      onPrepareMessage(json.personJid, json.text);
+    } catch (err) { setError(err instanceof Error ? err.message : 'تعذر تجهيز الرسالة'); }
+    finally { setBusy(false); }
+  };
 
   return <div dir="rtl" className="h-full overflow-y-auto bg-[#111716] px-4 py-5 text-[#f5f7f6] sm:px-7">
     <div className="mx-auto max-w-6xl space-y-5">
@@ -128,16 +139,17 @@ export function WhatsAppNumberCenter() {
           <div className="mt-4 space-y-2">{data?.files.map((file) => <div key={file.id} className={`flex w-full items-center gap-1 rounded-xl border p-1 ${file.id === fileId ? 'border-[#21c063] bg-[#203328]' : 'border-[#34453c] hover:bg-[#223228]'}`}><button type="button" onClick={() => setFileId(file.id)} className="flex min-w-0 flex-1 items-center gap-3 p-2 text-right"><FileText className="h-5 w-5 shrink-0 text-[#21c063]" /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold">{file.name}</span><span className="text-xs text-[#98aaa2]">{file.total} رقم · المتبقي {file.remaining}</span></span>{file.remaining === 0 && <span className="rounded-full bg-amber-500/15 px-2 py-1 text-xs text-amber-300">خلصت الأرقام</span>}</button><button type="button" onClick={() => void deleteFile(file)} disabled={busy} title={`حذف ${file.name}`} aria-label={`حذف ${file.name}`} className="shrink-0 rounded-lg p-2 text-[#98aaa2] hover:bg-rose-500/10 hover:text-rose-300 focus-visible:outline-2 focus-visible:outline-rose-400 disabled:opacity-50"><Trash2 className="h-4 w-4" /></button></div>)}{data && !data.files.length && <p className="rounded-xl border border-dashed border-[#34453c] p-6 text-center text-sm text-[#98aaa2]">ارفع أول ملف أرقام للبدء.</p>}</div>
         </section>
         <section className="rounded-2xl border border-[#2a3933] bg-[#18201d] p-4">
-          <h2 className="font-bold">توزيع جديد</h2><p className="mt-1 text-xs text-[#98aaa2]">اختر الفرع وعدد الأرقام لكل شخص. الحجز نهائي حتى لا يتكرر أي رقم.</p>
+          <h2 className="font-bold">توزيع جديد</h2><p className="mt-1 text-xs text-[#98aaa2]">اختر ملف المصدر والفرع. نأخذ الأرقام بالترتيب من أول رقم غير موزع في الملف المختار.</p>
+          <label className="mt-4 block text-xs font-semibold">ملف المصدر<select required value={fileId} onChange={(event) => setFileId(event.target.value)} className="mt-1.5 w-full rounded-lg border border-[#34453c] bg-[#111716] p-2 text-sm outline-none focus:border-[#21c063]"><option value="">اختر الملف الذي يبدأ التوزيع منه</option>{data?.files.map((file) => <option key={file.id} value={file.id} disabled={file.remaining === 0}>{file.name} · المتبقي {file.remaining}</option>)}</select></label>
           <label className="mt-4 block text-xs font-semibold">الفرع<select value={branchId} onChange={(event) => setBranchId(event.target.value)} className="mt-1.5 w-full rounded-lg border border-[#34453c] bg-[#111716] p-2 text-sm outline-none focus:border-[#21c063]"><option value="">اختر فرعًا</option>{data?.branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name} · {branch.members.length} أشخاص</option>)}</select></label>
           <label className="mt-4 block text-xs font-semibold">عدد الأرقام لكل شخص<input type="number" min={1} max={1000} value={perPerson} onChange={(event) => setPerPerson(Number(event.target.value))} className="mt-1.5 w-full rounded-lg border border-[#34453c] bg-[#111716] p-2 text-sm outline-none focus:border-[#21c063]" /></label>
           <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[#98aaa2]"><Users className="h-4 w-4" />{currentBranch?.members.length || 0} أشخاص · المطلوب {(currentBranch?.members.length || 0) * (Number.isFinite(perPerson) ? perPerson : 0)} رقم · المتبقي في الملف {currentFile?.remaining || 0}</div>
           {currentBranch && <div className="mt-3 rounded-xl border border-[#34453c] bg-[#111716] p-3"><div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold">أعضاء فرع {currentBranch.name}</span><button type="button" onClick={() => openBranchEditor(currentBranch)} className="text-xs font-bold text-[#21c063] hover:underline">تعديل الأعضاء</button></div><p className="mt-2 text-xs leading-6 text-[#98aaa2]">{currentBranch.members.length ? currentBranch.members.map((member) => member.name).join('، ') : 'لا يوجد أشخاص في هذا الفرع بعد.'}</p></div>}
           <button type="button" disabled={busy || !fileId || !currentBranch?.members.length || !currentFile?.remaining} onClick={() => void allocate()} className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-[#21c063] px-4 py-2.5 text-sm font-bold text-[#092116] disabled:cursor-not-allowed disabled:opacity-50">{busy && <Loader2 className="h-4 w-4 animate-spin" />}حجز أرقام للفرع</button>
-          <p className="mt-2 text-xs text-[#98aaa2]">الحجز والتوزيع داخل النظام فقط؛ لا تُرسل رسائل واتساب تلقائيًا.</p>
+          <p className="mt-2 text-xs text-[#98aaa2]">بعد الحجز، جهّز رسالة واحدة لكل شخص تحتوي أرقامه، رقمًا في كل سطر. لن تُرسل تلقائيًا.</p>
         </section>
       </div>
-      <section className="rounded-2xl border border-[#2a3933] bg-[#18201d] p-4"><h2 className="font-bold">سجل التوزيع</h2><p className="mt-1 text-xs text-[#98aaa2]">كل دفعة محفوظة باسم الشخص والملف وتاريخ الحجز.</p><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{data?.allocations.map((item) => <div key={item.id} className="rounded-xl border border-[#34453c] bg-[#111716] p-3"><div className="font-semibold">{item.personName}</div><div className="mt-1 truncate text-xs text-[#98aaa2]">{item.fileName || data.files.find((file) => file.id === item.fileId)?.name || 'ملف أرقام'} · {item.count} رقم</div><div className="mt-1 text-xs text-[#98aaa2]">{new Date(item.createdAt).toLocaleString('ar-JO')}</div><a href={`/api/whatsapp/number-center?download=${encodeURIComponent(item.id)}`} className="mt-3 inline-flex items-center gap-1.5 text-xs font-bold text-[#21c063] hover:underline"><Download className="h-4 w-4" />تنزيل أرقام الشخص</a></div>)}{data && !data.allocations.length && <p className="text-sm text-[#98aaa2]">لم تُحجز أرقام بعد.</p>}</div></section>
+      <section className="rounded-2xl border border-[#2a3933] bg-[#18201d] p-4"><h2 className="font-bold">سجل التوزيع</h2><p className="mt-1 text-xs text-[#98aaa2]">كل دفعة محفوظة باسم الشخص والملف وتاريخ الحجز.</p><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{data?.allocations.map((item) => <div key={item.id} className="rounded-xl border border-[#34453c] bg-[#111716] p-3"><div className="font-semibold">{item.personName}</div><div className="mt-1 truncate text-xs text-[#98aaa2]">{item.fileName || data.files.find((file) => file.id === item.fileId)?.name || 'ملف أرقام'} · {item.count} رقم</div><div className="mt-1 text-xs text-[#98aaa2]">{new Date(item.createdAt).toLocaleString('ar-JO')}</div><div className="mt-3 flex flex-wrap gap-3"><button type="button" disabled={busy} onClick={() => void prepareMessage(item)} className="inline-flex items-center gap-1.5 text-xs font-bold text-[#21c063] hover:underline disabled:opacity-50"><MessageSquare className="h-4 w-4" />تجهيز رسالة الأرقام</button><a href={`/api/whatsapp/number-center?download=${encodeURIComponent(item.id)}`} className="inline-flex items-center gap-1.5 text-xs font-bold text-[#98aaa2] hover:underline"><Download className="h-4 w-4" />تنزيل الأرقام</a></div></div>)}{data && !data.allocations.length && <p className="text-sm text-[#98aaa2]">لم تُحجز أرقام بعد.</p>}</div></section>
       {editingBranch && <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/75 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditingBranchId(''); }}><div role="dialog" aria-modal="true" aria-label={`تعديل فرع ${editingBranch.name}`} className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl border border-[#3b5445] bg-[#18201d] p-5 shadow-2xl"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold text-[#21c063]">قائمة الفرع</p><h2 className="mt-1 text-xl font-bold">{editingBranch.name}</h2></div><button type="button" onClick={() => setEditingBranchId('')} aria-label="إغلاق" className="rounded-lg p-1 text-[#98aaa2] hover:bg-white/10"><X className="h-5 w-5" /></button></div>
         {error && <p role="alert" className="mt-3 rounded-lg bg-rose-500/10 p-2 text-xs text-rose-300">{error}</p>}
         <form onSubmit={(event) => { event.preventDefault(); void branchAction({ action: 'rename_branch', branchId: editingBranch.id, name: branchName }); }} className="mt-4 flex gap-2"><input required maxLength={80} value={branchName} onChange={(event) => setBranchName(event.target.value)} aria-label="اسم الفرع" className="min-w-0 flex-1 rounded-lg border border-[#34453c] bg-[#111716] px-3 py-2 text-sm outline-none focus:border-[#21c063]" /><button disabled={busy || branchName.trim() === editingBranch.name} className="rounded-lg border border-[#3b5445] px-3 py-2 text-xs font-bold disabled:opacity-50">حفظ الاسم</button></form>

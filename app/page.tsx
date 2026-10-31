@@ -126,7 +126,7 @@ export default function HomePage() {
           }}
         />
       </div>
-      {!popoutChat && view === 'numbers' && <div className="min-h-0 flex-1"><WhatsAppNumberCenter /></div>}
+      {!popoutChat && view === 'numbers' && <div className="min-h-0 flex-1"><WhatsAppNumberCenter onPrepareMessage={openCompose} /></div>}
       {!popoutChat && (view === 'dashboard' || view === 'compose') && <div className="min-h-0 flex-1">
         <WhatsAppWorkspace
           key={`${view}-${composeRevision}-${taskRevision}`}

@@ -7,6 +7,8 @@ export type NumberAllocation = { id: string; fileId: string; fileName?: string; 
 export type NumberBranch = { id: string; name: string; members: Array<{ id: string; name: string }>; createdAt: string };
 export type NumberCenterData = { files: NumberFile[]; allocations: NumberAllocation[]; branches: NumberBranch[] };
 
+export const allocationMessageText = (allocation: NumberAllocation) => allocation.numbers.join('\n');
+
 const filePath = (userId: string) => path.join(process.cwd(), 'whatsapp_auth', `user_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`, 'number-center.json');
 
 export function readNumberCenter(userId: string): NumberCenterData {
@@ -77,6 +79,9 @@ export function allocateNumbers(userId: string, fileId: string, recipients: Arra
   const available = file.numbers.filter((number) => !used.has(number));
   const needed = recipients.length * perPerson;
   if (available.length < needed) throw new Error(available.length ? `المتبقي ${available.length} رقم فقط، والمطلوب ${needed}. قلّل العدد أو الأشخاص.` : 'خلصت كل الأرقام الموجودة في هذا الملف');
+  if (recipients.some((_, index) => available.slice(index * perPerson, (index + 1) * perPerson).join('\n').length > 4096)) {
+    throw new Error('عدد الأرقام لكل شخص كبير جدًا لرسالة واتساب واحدة. قلّل العدد.');
+  }
   const createdAt = new Date().toISOString();
   const allocations = recipients.map((recipient, index): NumberAllocation => ({
     id: randomUUID(), fileId, fileName: file.name, personJid: recipient.id, personName: recipient.name,
