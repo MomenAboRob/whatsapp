@@ -1,5 +1,4 @@
 import path from 'path';
-import { dataPath } from '@/lib/data-storage';
 import fs from 'fs';
 import { EventEmitter } from 'events';
 import QRCode from 'qrcode';
@@ -360,7 +359,7 @@ export class WhatsAppManager {
   private constructor(userId: string = 'recmrgqBhC2YImlC0') {
     this.userId = userId || 'recmrgqBhC2YImlC0';
     const cleanId = this.userId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const baseAuthDir = dataPath('whatsapp_auth');
+    const baseAuthDir = path.join(process.cwd(), 'whatsapp_auth');
     this.authDir = path.join(baseAuthDir, `user_${cleanId}`);
     this.avatarSyncStateFilePath = path.join(this.authDir, 'avatar_sync_state.json');
     try {
@@ -410,8 +409,8 @@ export class WhatsAppManager {
     this.groupsFilePath = path.join(this.authDir, 'stored_groups.json');
     this.contactsFilePath = path.join(this.authDir, 'stored_contacts.json');
     this.avatarsFilePath = path.join(this.authDir, 'stored_avatars.json');
-    this.avatarsDir = dataPath('whatsapp_avatars');
-    this.mediaDir = dataPath('whatsapp_media');
+    this.avatarsDir = path.join(process.cwd(), 'whatsapp_avatars');
+    this.mediaDir = path.join(process.cwd(), 'whatsapp_media');
 
     if (!fs.existsSync(this.avatarsDir)) {
       try {
@@ -508,7 +507,7 @@ export class WhatsAppManager {
     return Array.from(globalObj.__waManagerInstances.values());
   }
 
-  private static sharedMetaFilePath = dataPath('whatsapp_auth', 'shared_message_meta.json');
+  private static sharedMetaFilePath = path.join(process.cwd(), 'whatsapp_auth', 'shared_message_meta.json');
 
   public static getSharedMeta(): Record<string, { linkedReceiptUrl?: string; linkedMsgId?: string; status?: any; updatedAt: number }> {
     try {
@@ -564,7 +563,7 @@ export class WhatsAppManager {
   public static initAllSessions(): void {
     if (process.env.WHATSAPP_AUTO_CONNECT === '0') return;
     try {
-      const baseAuthDir = dataPath('whatsapp_auth');
+      const baseAuthDir = path.join(process.cwd(), 'whatsapp_auth');
       if (!fs.existsSync(baseAuthDir)) return;
 
       // تهيئة جلسة المستخدم الأساسي
@@ -1618,7 +1617,7 @@ export class WhatsAppManager {
 
       // تصحيح ملفات الفيديو والملصقات المخزنة محلياً إذا كان امتدادها .jpg خطأً
       if (m.mediaUrl && m.mediaUrl.endsWith('.jpg')) {
-        const publicMediaDir = dataPath('public', 'media');
+        const publicMediaDir = path.join(process.cwd(), 'public', 'media');
         const oldFile = fs.existsSync(path.join(this.mediaDir, path.basename(m.mediaUrl)))
           ? path.join(this.mediaDir, path.basename(m.mediaUrl))
           : path.join(publicMediaDir, path.basename(m.mediaUrl));
@@ -1909,7 +1908,7 @@ export class WhatsAppManager {
         const raw = fs.readFileSync(this.messagesFilePath, 'utf-8');
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          const publicMediaDir = dataPath('public', 'media');
+          const publicMediaDir = path.join(process.cwd(), 'public', 'media');
           const existingExts = ['webp', 'jpg', 'png', 'mp4', 'ogg', 'm4a', 'mp3', 'pdf'];
           this.incomingMessages = parsed
             .filter((m: any) => !m.isDemo && !String(m.id).startsWith('msg_'))
@@ -2210,8 +2209,7 @@ export class WhatsAppManager {
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        // The current WhatsApp handshake rejects Baileys' legacy Desktop web sub-platform
-        // before QR generation. Keep the accepted Chrome web profile for reliable pairing.
+        // Keep the accepted Chrome web profile; the legacy Desktop sub-platform now returns 428 before QR.
         browser: Browsers.ubuntu('Chrome'),
         version: latestVersion.version,
         // Full history is requested only when linking this companion device by QR.
@@ -3152,7 +3150,7 @@ export class WhatsAppManager {
 
   private async downloadMediaOnce(id: string, msg: any, content?: any): Promise<string | undefined> {
     // 1. فحص فوري: إذا كان الملف محملاً مسبقاً على القرص، إرجاعه مباشرة وتحديث الرسالة
-    const publicMediaDir = dataPath('public', 'media');
+    const publicMediaDir = path.join(process.cwd(), 'public', 'media');
     const existingExts = ['webp', 'jpg', 'png', 'mp4', 'ogg', 'm4a', 'mp3', 'pdf'];
     for (const e of existingExts) {
       const p = path.join(this.mediaDir, `${id}.${e}`);
@@ -3465,7 +3463,7 @@ export class WhatsAppManager {
     if (!m.isViewOnce && !effectiveMediaUrl && m.hasMedia) {
       const ext = m.mediaType === 'sticker' ? 'webp' : m.mediaType === 'video' ? 'mp4' : ['audio', 'voice'].includes(m.mediaType || '') ? 'm4a' : m.mediaType === 'document' ? 'pdf' : 'jpg';
       const storageFile = path.join(this.mediaDir, `${m.id}.${ext}`);
-    const publicMediaDir = dataPath('public', 'media');
+      const publicMediaDir = path.join(process.cwd(), 'public', 'media');
       const publicFile = path.join(publicMediaDir, `${m.id}.${ext}`);
       if (fs.existsSync(storageFile) || fs.existsSync(publicFile)) {
         effectiveMediaUrl = `/media/${m.id}.${ext}`;
@@ -4396,7 +4394,7 @@ export class WhatsAppManager {
       if (fs.existsSync(storageMedia)) return `/media/${filename}`;
       const storageAvatar = path.join(this.avatarsDir, filename);
       if (fs.existsSync(storageAvatar)) return `/avatars/${filename}`;
-      const mediaDiskPath = dataPath('public', 'media', filename);
+      const mediaDiskPath = path.join(process.cwd(), 'public', 'media', filename);
       if (fs.existsSync(mediaDiskPath)) return `/media/${filename}`;
     }
     if (clean.startsWith('/media/') || clean.startsWith('/avatars/')) return clean;
