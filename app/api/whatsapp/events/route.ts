@@ -37,6 +37,7 @@ export async function GET(request: NextRequest) {
       const onStatus = (status: any) => sendEvent('status', status);
       const onGroups = (groups: any) => sendEvent('groups', groups);
       const onPresence = (presence: any) => sendEvent('presence', presence);
+      const onHistorySync = () => sendEvent('history_sync', {});
 
       wa.events.on('message', onMessage);
       wa.events.on('receipt', onReceipt);
@@ -46,6 +47,7 @@ export async function GET(request: NextRequest) {
       wa.events.on('status', onStatus);
       wa.events.on('groups', onGroups);
       wa.events.on('presence', onPresence);
+      wa.events.on('history_sync', onHistorySync);
 
       // 3. نبضات الحفاظ على الاتصال (Keep-Alive Ping) كل 15 ثانية لمنع انقطاع البروكسي أو المتصفح
       const heartbeatTimer = setInterval(() => {
@@ -70,6 +72,7 @@ export async function GET(request: NextRequest) {
         wa.events.off('status', onStatus);
         wa.events.off('groups', onGroups);
         wa.events.off('presence', onPresence);
+        wa.events.off('history_sync', onHistorySync);
         try {
           controller.close();
         } catch {}

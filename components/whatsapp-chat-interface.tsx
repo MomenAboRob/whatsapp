@@ -4670,6 +4670,12 @@ export function WhatsAppChatInterface({
           } catch {}
         });
 
+        es.addEventListener('history_sync', () => {
+          // Importing WhatsApp history can update older conversations far outside the
+          // current time window. Refresh the compact overview once the batch is saved.
+          void fetchMessages(true, undefined, true);
+        });
+
         es.addEventListener('message', (e: MessageEvent) => {
           try {
             const newMsg = JSON.parse(e.data);

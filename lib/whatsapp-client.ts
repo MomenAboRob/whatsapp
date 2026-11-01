@@ -252,6 +252,10 @@ export class WhatsAppManager {
   private mediaDir: string;
   private mediaDownloadsInFlight: Map<string, Promise<string | undefined>> = new Map();
   private emitGroupsDebounceTimer: NodeJS.Timeout | null = null;
+  private historyImportQueue: Promise<void> = Promise.resolve();
+  private historyRefreshTimer: NodeJS.Timeout | null = null;
+  private activeHistoryMessageLookup: Map<string, ChatMessage> | null = null;
+  private activeHistoryMessages: ChatMessage[] | null = null;
   private contactsMap: Record<string, string> = {};
   private savedContactsMap: Record<string, string> = {};
   private lidToPhoneMap: Record<string, string> = {};
@@ -1022,7 +1026,7 @@ export class WhatsAppManager {
 
     const timestampMs = Number(reaction?.senderTimestampMs) || Date.now();
 
-    const msg = this.incomingMessages.find(
+    const msg = this.activeHistoryMessageLookup?.get(targetMsgId) || this.incomingMessages.find(
       (m) => m.id === targetMsgId || m.rawBaileysMessage?.key?.id === targetMsgId
     );
     if (!msg) {
@@ -2348,84 +2352,126 @@ export class WhatsAppManager {
       });
 
       // استقبال سجل المحادثات والرسائل الفعلية الكاملة من الهاتف عند المزامنة
-      this.sock.ev.on('messaging-history.set', async ({ chats, contacts, messages, syncType }: any) => {
-        const groupsById = new Map(this.userGroups.map((group) => [group.id, group]));
-        const knownContactNames = new Set(this.userGroups.map((group) => group.name));
-        if (contacts && Array.isArray(contacts)) {
-          for (const c of contacts) {
-            this.rememberContact(c);
+      this.sock.ev.on('messaging-history.set', (history: any) => {
+        this.historyImportQueue = this.historyImportQueue.then(async () => {
+          const { chats, contacts, messages, syncType, isLatest } = history || {};
+          const groupsById = new Map(this.userGroups.map((group) => [group.id, group]));
+          const historyGroupLookup = new Map<string, WhatsAppGroupItem>();
+          for (const group of this.userGroups) {
+            historyGroupLookup.set(group.id, group);
+            historyGroupLookup.set(this.getCanonicalChatJid(group.id), group);
           }
-          this.persistContacts();
-        }
+          const knownContactNames = new Set(this.userGroups.map((group) => group.name));
+          if (contacts && Array.isArray(contacts)) {
+            for (const c of contacts) {
+              this.rememberContact(c);
+            }
+            this.persistContacts();
+          }
 
-        if (chats && Array.isArray(chats)) {
-          for (const c of chats) {
-            if (c?.id && c.id !== 'status@broadcast') {
-              const isGroup = c.id.endsWith('@g.us');
-              const hasArchiveState = c.archived !== undefined || c.archive !== undefined || c.isArchived !== undefined;
-              const isArchived = Boolean(c.archived || c.archive || c.isArchived);
-              const hasPinState = c.pinned !== undefined;
-              const pinned = c.pinned ? Number(c.pinned) || 1 : null;
-              let name = c.name || c.subject || this.contactsMap[c.id];
-              let phone: string | undefined;
-              if (!isGroup) {
-                const resolved = this.resolveRealContact(c.id, undefined, true);
-                name = (name && !name.startsWith('+10')) ? name : resolved.contactName;
-                phone = resolved.formattedPhone;
-              } else {
-                if (!name) name = 'مجموعة واتساب';
-              }
-              const existing = groupsById.get(c.id);
-              if (existing) {
-                if (name && !name.startsWith('+10') && existing.name !== name) {
-                  existing.name = name;
-                  knownContactNames.add(name);
+          if (chats && Array.isArray(chats)) {
+            for (const c of chats) {
+              if (c?.id && c.id !== 'status@broadcast') {
+                const isGroup = c.id.endsWith('@g.us');
+                const hasArchiveState = c.archived !== undefined || c.archive !== undefined || c.isArchived !== undefined;
+                const isArchived = Boolean(c.archived || c.archive || c.isArchived);
+                const hasPinState = c.pinned !== undefined;
+                const pinned = c.pinned ? Number(c.pinned) || 1 : null;
+                let name = c.name || c.subject || this.contactsMap[c.id];
+                let phone: string | undefined;
+                if (!isGroup) {
+                  const resolved = this.resolveRealContact(c.id, undefined, true);
+                  name = (name && !name.startsWith('+10')) ? name : resolved.contactName;
+                  phone = resolved.formattedPhone;
+                } else {
+                  if (!name) name = 'مجموعة واتساب';
                 }
-                existing.isGroup = isGroup;
-                if (phone) existing.phone = phone;
-                if (hasArchiveState) existing.archived = isArchived;
-                if (hasPinState) existing.pinned = pinned;
-              } else {
-                const added = { id: c.id, name, unreadCount: c.unreadCount || 0, isGroup, phone, ...(hasArchiveState ? { archived: isArchived } : {}), ...(hasPinState ? { pinned } : {}) };
-                this.userGroups.push(added);
-                groupsById.set(added.id, added);
-                knownContactNames.add(added.name);
+                const existing = groupsById.get(c.id);
+                if (existing) {
+                  if (name && !name.startsWith('+10') && existing.name !== name) {
+                    existing.name = name;
+                    knownContactNames.add(name);
+                  }
+                  existing.isGroup = isGroup;
+                  if (phone) existing.phone = phone;
+                  if (hasArchiveState) existing.archived = isArchived;
+                  if (hasPinState) existing.pinned = pinned;
+                } else {
+                  const added = { id: c.id, name, unreadCount: c.unreadCount || 0, isGroup, phone, ...(hasArchiveState ? { archived: isArchived } : {}), ...(hasPinState ? { pinned } : {}) };
+                  this.userGroups.push(added);
+                  groupsById.set(added.id, added);
+                  historyGroupLookup.set(added.id, added);
+                  historyGroupLookup.set(this.getCanonicalChatJid(added.id), added);
+                  knownContactNames.add(added.name);
+                }
               }
             }
           }
-        }
 
-        // إضافة كافة جهات الاتصال الخاصة الفردية إلى القائمة
-        for (const [jid, contactName] of Object.entries(this.contactsMap)) {
-          if (contactName && !contactName.startsWith('+10') && !groupsById.has(jid) && !knownContactNames.has(contactName)) {
-            const resolved = this.resolveRealContact(jid);
-            const added = {
-              id: jid,
-              name: contactName,
-              unreadCount: 0,
-              isGroup: false,
-              phone: resolved.formattedPhone,
-            };
-            this.userGroups.push(added);
-            groupsById.set(jid, added);
-            knownContactNames.add(contactName);
+          // إضافة كافة جهات الاتصال الخاصة الفردية إلى القائمة
+          for (const [jid, contactName] of Object.entries(this.contactsMap)) {
+            if (contactName && !contactName.startsWith('+10') && !groupsById.has(jid) && !knownContactNames.has(contactName)) {
+              const resolved = this.resolveRealContact(jid);
+              const added = {
+                id: jid,
+                name: contactName,
+                unreadCount: 0,
+                isGroup: false,
+                phone: resolved.formattedPhone,
+              };
+              this.userGroups.push(added);
+              groupsById.set(jid, added);
+              historyGroupLookup.set(jid, added);
+              historyGroupLookup.set(this.getCanonicalChatJid(jid), added);
+              knownContactNames.add(contactName);
+            }
           }
-        }
 
-        // Index existing messages once so each restored history item can check duplicates in O(1).
-        if (syncType !== 2 && messages && Array.isArray(messages)) {
-          const historyMessageLookup = new Map<string, ChatMessage>();
-          for (const message of this.incomingMessages) {
-            historyMessageLookup.set(message.id, message);
-            const rawId = message.rawBaileysMessage?.key?.id;
-            if (rawId) historyMessageLookup.set(rawId, message);
+          // Index existing messages once so each restored history item can check duplicates in O(1).
+          if (messages && Array.isArray(messages)) {
+            const historyMessageLookup = this.activeHistoryMessageLookup || new Map<string, ChatMessage>();
+            if (!this.activeHistoryMessageLookup) {
+              for (const message of this.incomingMessages) {
+                historyMessageLookup.set(message.id, message);
+                const rawId = message.rawBaileysMessage?.key?.id;
+                if (rawId) historyMessageLookup.set(rawId, message);
+              }
+              this.activeHistoryMessageLookup = historyMessageLookup;
+              this.activeHistoryMessages = [];
+            }
+            for (let index = 0; index < messages.length; index += 1) {
+              this.ingestBaileysMessage(messages[index], false, historyMessageLookup, historyGroupLookup);
+              if ((index + 1) % 250 === 0) {
+                await new Promise<void>((resolve) => setImmediate(resolve));
+              }
+            }
           }
-          for (const msg of messages) {
-            await this.ingestBaileysMessage(msg, false, historyMessageLookup);
+          // FULL history may arrive as many chunks. Sanitize once at the final chunk so the
+          // single-core server does not repeatedly walk the complete history while syncing.
+          if (syncType !== 2 || isLatest) {
+            const importedMessages = this.activeHistoryMessages || [];
+            if (importedMessages.length) {
+              this.incomingMessages = [...this.incomingMessages, ...importedMessages]
+                .sort((a, b) => (b.timestampMs || 0) - (a.timestampMs || 0));
+            }
+            this.activeHistoryMessages = null;
+            this.activeHistoryMessageLookup = null;
+            this.sanitizeUserGroupsAndMessages();
           }
-        }
-        this.sanitizeUserGroupsAndMessages();
-        this.persistData();
+          this.persistData();
+          if (syncType !== 2 || isLatest) {
+            if (this.historyRefreshTimer) clearTimeout(this.historyRefreshTimer);
+            this.historyRefreshTimer = setTimeout(() => {
+              this.historyRefreshTimer = null;
+              this.events.emit('history_sync');
+            }, 1200);
+            this.historyRefreshTimer.unref?.();
+          }
+        }).catch((error) => {
+          this.activeHistoryMessageLookup = null;
+          this.activeHistoryMessages = null;
+          console.error('تعذر استيراد سجل محادثات واتساب:', error);
+        });
       });
 
       // تحديث قائمة المحادثات عند وصول أي محادثات جديدة
@@ -2544,10 +2590,10 @@ export class WhatsAppManager {
       });
 
       // استقبال الرسائل الجديدة فور وصولها
-      this.sock.ev.on('messages.upsert', async (m: any) => {
+      this.sock.ev.on('messages.upsert', (m: any) => {
         if (m.messages && Array.isArray(m.messages)) {
           for (const msg of m.messages) {
-            await this.ingestBaileysMessage(msg, m.type === 'notify');
+            this.ingestBaileysMessage(msg, m.type === 'notify');
           }
         }
       });
@@ -2909,18 +2955,17 @@ export class WhatsAppManager {
     }
   }
 
-  private async ingestBaileysMessage(msg: any, live = false, messageLookup?: Map<string, ChatMessage>) {
+  private ingestBaileysMessage(msg: any, live = false, messageLookup?: Map<string, ChatMessage>, groupLookup?: Map<string, WhatsAppGroupItem>) {
     if (!msg?.message && !msg?.reactions) return;
     if (!isConversationJid(msg.key?.remoteJid)) return;
     const id = msg.key?.id || String(Date.now() + Math.random());
-    const existing = messageLookup
-      ? messageLookup.get(id)
-      : this.incomingMessages.find((m) => m.id === id || m.rawBaileysMessage?.key?.id === id);
+    const existing = messageLookup?.get(id) || this.activeHistoryMessageLookup?.get(id) ||
+      (!messageLookup ? this.incomingMessages.find((m) => m.id === id || m.rawBaileysMessage?.key?.id === id) : undefined);
     if (existing) {
       let changed = false;
 
       if (!existing.quotedMessage) {
-        const q = this.extractQuotedMessage(msg, this.incomingMessages);
+        const q = this.extractQuotedMessage(msg, this.incomingMessages, messageLookup || this.activeHistoryMessageLookup || undefined);
         if (q) {
           existing.quotedMessage = q;
           existing.rawBaileysMessage = msg;
@@ -2942,6 +2987,13 @@ export class WhatsAppManager {
       }
 
       this.applyPendingReactions(id);
+      if (live) {
+        if (!existing.isFromMe) {
+          void recordLiveMention(this, existing)
+            .catch((error) => console.warn('تعذر تسجيل المنشن الجديد:', error));
+        }
+        this.events.emit('message', existing);
+      }
       return;
     }
 
@@ -3045,36 +3097,41 @@ export class WhatsAppManager {
 
     let groupTitle = '';
     if (isGroup) {
-      const found = this.userGroups.find((g) => g.id === senderJid);
+      const found = groupLookup?.get(senderJid) || this.userGroups.find((g) => g.id === senderJid);
       groupTitle = found ? found.name : 'مجموعة واتساب';
       if (!found) {
-        this.userGroups.push({ id: senderJid, name: 'مجموعة واتساب', unreadCount: 1, isGroup: true });
+        const added = { id: senderJid, name: 'مجموعة واتساب', unreadCount: live && !fromMe ? 1 : 0, isGroup: true };
+        this.userGroups.push(added);
+        groupLookup?.set(senderJid, added);
       } else {
-        found.unreadCount = (found.unreadCount || 0) + 1;
+        if (live && !fromMe) found.unreadCount = (found.unreadCount || 0) + 1;
       }
     } else {
       const resolved = this.resolveRealContact(senderJid, undefined, true);
       groupTitle = resolved.contactName;
 
-      const found = this.userGroups.find(
+      const found = groupLookup?.get(senderJid) || this.userGroups.find(
         (g) => g.id === senderJid || (resolved.realPhone && (g.id === `${resolved.realPhone}@s.whatsapp.net` || g.phone === resolved.formattedPhone))
       );
 
       if (found) {
+        groupLookup?.set(senderJid, found);
         if (resolved.contactName && !resolved.contactName.startsWith('+10') && found.name !== resolved.contactName) {
           found.name = resolved.contactName;
         }
         if (resolved.formattedPhone) found.phone = resolved.formattedPhone;
-        if (!fromMe) found.unreadCount = (found.unreadCount || 0) + 1;
+        if (live && !fromMe) found.unreadCount = (found.unreadCount || 0) + 1;
       } else {
-        this.userGroups.push({
+        const added = {
           id: senderJid,
           name: groupTitle,
-          unreadCount: fromMe ? 0 : 1,
+          unreadCount: live && !fromMe ? 1 : 0,
           isGroup: false,
           phone: resolved.formattedPhone,
           avatarUrl: this.avatarsMap[resolved.cleanId],
-        });
+        };
+        this.userGroups.push(added);
+        groupLookup?.set(senderJid, added);
       }
     }
 
@@ -3087,7 +3144,7 @@ export class WhatsAppManager {
     const decodedBody = this.decodeMentions(body);
 
     // استخراج معلومات الرسالة المقتبسة إن كانت هذه الرسالة رداً على رسالة أخرى
-    const quotedMessage = this.extractQuotedMessage(msg, this.incomingMessages);
+    const quotedMessage = this.extractQuotedMessage(msg, this.incomingMessages, messageLookup || this.activeHistoryMessageLookup || undefined);
 
     let deliveryStatus: 'pending' | 'sent' | 'delivered' | 'read' | undefined = undefined;
     if (fromMe) {
@@ -3129,9 +3186,12 @@ export class WhatsAppManager {
       isDeleted: Boolean(this.getRevokedIds().has(id)),
       deletedAt: this.getRevokedIds().has(id) ? Date.now() : undefined,
     };
-    this.incomingMessages.unshift(storedMessage);
+    if (messageLookup && this.activeHistoryMessages) this.activeHistoryMessages.push(storedMessage);
+    else this.incomingMessages.unshift(storedMessage);
     messageLookup?.set(id, storedMessage);
     if (msg.key?.id) messageLookup?.set(msg.key.id, storedMessage);
+    this.activeHistoryMessageLookup?.set(id, storedMessage);
+    if (msg.key?.id) this.activeHistoryMessageLookup?.set(msg.key.id, storedMessage);
 
     this.applyPendingReactions(id);
     this.persistData();
@@ -3140,10 +3200,10 @@ export class WhatsAppManager {
       void recordLiveMention(this, savedMessage)
         .catch((error) => console.warn('تعذر تسجيل المنشن الجديد:', error));
     }
-    this.events.emit('message', this.incomingMessages[0]);
+    if (live) this.events.emit('message', this.incomingMessages[0]);
 
     // الوسائط القديمة تُجلب عند فتح المحادثة؛ تنزيل تاريخ كامل هنا يزاحم الصور الظاهرة.
-    if (hasMedia && this.sock && timestampMs >= Date.now() - 2 * 60 * 60 * 1000) {
+    if (live && hasMedia && this.sock && timestampMs >= Date.now() - 2 * 60 * 60 * 1000) {
       void this.downloadMediaInBackground(id, msg, content);
     }
   }
