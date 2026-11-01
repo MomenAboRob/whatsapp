@@ -48,7 +48,12 @@ export async function POST(req: NextRequest) {
   const user = getAuthUserFromRequest(req);
   if (!user) return bad('غير مصرح', 401);
   const origin = req.headers.get('origin');
-  if (origin && origin !== req.nextUrl.origin) return bad('مصدر الطلب غير صالح', 403);
+  const forwardedHost = req.headers.get('x-forwarded-host')?.split(',')[0].trim();
+  const host = forwardedHost || req.headers.get('host');
+  const forwardedProto = req.headers.get('x-forwarded-proto')?.split(',')[0].trim();
+  const proto = forwardedProto || req.nextUrl.protocol.replace(':', '');
+  const expectedOrigin = host ? `${proto}://${host}` : req.nextUrl.origin;
+  if (origin && origin !== expectedOrigin) return bad('مصدر الطلب غير صالح', 403);
   if (req.headers.get('content-type')?.includes('multipart/form-data')) {
     const form = await req.formData();
     const files = form.getAll('files');
