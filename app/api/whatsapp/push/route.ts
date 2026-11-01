@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserFromRequest } from '@/lib/auth';
-import { getPushPublicKey, removePushSubscription, savePushSubscription } from '@/lib/whatsapp-workspace';
+import { getPushPublicKey, readWorkspace, removePushSubscription, savePushSubscription, saveWorkspace } from '@/lib/whatsapp-workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,6 +26,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true });
     }
     savePushSubscription(user.id, body.subscription);
+    const workspace = readWorkspace(user.id);
+    if (!workspace.settings.browserEnabled) {
+      workspace.settings.browserEnabled = true;
+      saveWorkspace(user.id, workspace);
+    }
     return NextResponse.json({ success: true });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'تعذر حفظ الإشعارات' }, { status: 400 });
