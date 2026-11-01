@@ -20,9 +20,22 @@ export function PhonePushPrompt() {
       return;
     }
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
-    void navigator.serviceWorker.ready.then((registration) => registration.pushManager.getSubscription())
-      .then((subscription) => setVisible(!subscription))
-      .catch(() => {});
+    void navigator.serviceWorker.ready.then(async (registration) => {
+      const subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        setVisible(true);
+        return;
+      }
+      const response = await fetch('/api/whatsapp/push', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store',
+        body: JSON.stringify({ subscription: subscription.toJSON() }),
+      });
+      if (!response.ok) throw new Error('تعذر إعادة ربط إشعارات الهاتف.');
+      setVisible(false);
+    }).catch(() => {
+      setVisible(true);
+      setMessage('تعذر إعادة ربط إشعارات الهاتف. اضغط تفعيل الإشعارات لإعادة المحاولة.');
+    });
   }, []);
 
   const enable = async () => {
@@ -46,7 +59,8 @@ export function PhonePushPrompt() {
       const padding = '='.repeat((4 - config.publicKey.length % 4) % 4);
       const raw = atob(config.publicKey.replace(/-/g, '+').replace(/_/g, '/') + padding);
       const applicationServerKey = Uint8Array.from(raw, (char) => char.charCodeAt(0));
-      const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+      const subscription = await registration.pushManager.getSubscription()
+        || await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
       const response = await fetch('/api/whatsapp/push', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ subscription: subscription.toJSON() }),
