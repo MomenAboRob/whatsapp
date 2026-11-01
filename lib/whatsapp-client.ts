@@ -2209,10 +2209,12 @@ export class WhatsAppManager {
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        browser: Browsers.ubuntu('Chrome'),
+        // WhatsApp sends fuller first-link history to a desktop companion profile.
+        browser: Browsers.macOS('Desktop'),
         version: latestVersion.version,
-        // سجل المحادثات الكامل محفوظ محلياً؛ لا نعيد مزامنته عند كل إعادة اتصال.
-        syncFullHistory: false,
+        // Full history is requested only when linking this companion device by QR.
+        // Existing linked sessions reconnect normally and do not replay the initial sync.
+        syncFullHistory: true,
         emitOwnEvents: true,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
