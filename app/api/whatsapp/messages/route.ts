@@ -74,9 +74,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: true, messages, partial: true });
   }
 
-  if (wa.getStatus().status === 'CONNECTED') {
-    wa.flushPendingMessages().catch(() => {});
-  }
   const snapshotAt = Date.now();
   if (req.nextUrl.searchParams.get('overview') === 'true') {
     const latestByChat = new Map<string, ChatMessage>();
@@ -98,8 +95,15 @@ export async function GET(req: NextRequest) {
   const since = sinceParam && /^\d+$/.test(sinceParam) ? Number(sinceParam) : null;
   const partial = since !== null && Number.isSafeInteger(since) && since > 0 && since <= snapshotAt;
   const messages = partial
-    ? wa.toClientMessages(wa.getMessages().filter((message) => !message.timestampMs || message.timestampMs >= since))
+    ? wa.toClientMessages(wa.getMessages().filter((message) => (message.timestampMs || 0) >= since))
     : wa.getClientMessages();
+
+  // Fast fallback sync: when SSE is temporarily unavailable, return only new messages.
+  // Re-sending the full groups/status snapshot every 500ms needlessly burdens the server.
+  if (partial) {
+    return NextResponse.json({ success: true, messages, snapshotAt, partial: true });
+  }
+
   const groups = wa.getUserGroups();
   const status = wa.getStatus();
   return NextResponse.json({ success: true, messages, groups, status, snapshotAt, partial });
@@ -162,50 +166,54 @@ export async function POST(req: NextRequest) {
     if (action === 'add' && message) {
       const isConnected = wa.getStatus().status === 'CONNECTED';
       const targetChat = message.chatJid || message.chatName;
+      const outboundMessage: ChatMessage = {
+        ...message,
+        id: message.id || `msg_real_${Date.now()}`,
+        isFromMe: true,
+        sender: 'أنا',
+        senderName: 'أنا',
+        deliveryStatus: 'pending',
+      };
 
-      if (isConnected && targetChat && (message.text || message.mediaUrl || message.mediaData)) {
-        if (message.mediaData?.fileBase64) {
-          const res = await wa.sendMediaMessage(targetChat, {
-            fileBase64: message.mediaData.fileBase64,
-            mediaType: message.mediaData.mediaType || message.mediaType || 'image',
-            fileName: message.mediaData.fileName || message.fileName,
-            mimetype: message.mediaData.mimetype,
-            caption: message.text || message.mediaData.caption,
-            quotedMsgId: message.quotedMessage?.id,
-            quotedPayload: message.quotedMessage,
-          });
-          return NextResponse.json({
-            success: res.success,
-            messageId: res.messageId,
-            messages: wa.getClientMessages(),
-            message: res.message,
-          });
+      if (!targetChat) {
+        return NextResponse.json({ success: false, message: 'تعذر تحديد المحادثة لإرسال الرسالة.' }, { status: 400 });
+      }
+
+      if (message.mediaData?.fileBase64) {
+        if (!isConnected) {
+          return NextResponse.json({ success: false, message: 'اتصل بواتساب لإرسال الوسائط.' }, { status: 503 });
         }
-
-        // إرسال الرسالة عبر جلسة واتساب المباشرة دون إنشاء نسخة وهمية مكررة
-        const res = await wa.forwardMessage(
-          targetChat,
-          message.text || '',
-          message.mediaUrl,
-          message.quotedMessage?.id,
-          message.quotedMessage,
-          undefined,
-          Array.isArray(message.mentions) ? message.mentions.filter((m: unknown) => typeof m === 'string') : undefined
-        );
+        const res = await wa.sendMediaMessage(targetChat, {
+          fileBase64: message.mediaData.fileBase64,
+          mediaType: message.mediaData.mediaType || message.mediaType || 'image',
+          fileName: message.mediaData.fileName || message.fileName,
+          mimetype: message.mediaData.mimetype,
+          caption: message.text || message.mediaData.caption,
+          quotedMsgId: message.quotedMessage?.id,
+          quotedPayload: message.quotedMessage,
+        });
+        const sentMessage = res.messageId
+          ? wa.getMessages().find((item) => item.id === res.messageId)
+          : undefined;
         return NextResponse.json({
           success: res.success,
           messageId: res.messageId,
-          messages: wa.getClientMessages(),
+          sentMessage: sentMessage ? wa.toClientMessage(sentMessage) : null,
           message: res.message,
         });
-      } else {
-        wa.addMessage(message);
-        return NextResponse.json({
-          success: true,
-          messages: wa.getClientMessages(),
-          message: 'تمت إضافة الرسالة بنجاح.'
-        });
       }
+
+      // Persist a small durable outbox entry, then let the server send it independently
+      // of the browser request so leaving the chat cannot discard the message.
+      const queuedMessage = await wa.enqueueOutgoingMessage(outboundMessage);
+      const latestMessage = wa.getOutgoingQueueMessage(outboundMessage.id) || queuedMessage;
+      const stillPending = latestMessage.id === outboundMessage.id;
+      return NextResponse.json({
+        success: true,
+        queued: stillPending,
+        sentMessage: wa.toClientMessage(latestMessage),
+        message: stillPending ? 'تم حفظ الرسالة وبدأ إرسالها مباشرة.' : 'تم إرسال الرسالة مسبقاً.',
+      });
     }
 
     if (action === 'edit' && (body.id || body.messageId) && (body.text || body.newText)) {
@@ -233,11 +241,16 @@ export async function POST(req: NextRequest) {
 
     if (action === 'retry_message' && (body.id || body.messageId)) {
       const msgId = body.id || body.messageId;
-      const res = await wa.retryPendingMessage(msgId);
+      const fallbackMessage = body.message && body.message.id === msgId
+        ? body.message as ChatMessage
+        : undefined;
+      const res = await wa.retryPendingMessage(msgId, fallbackMessage);
+      const sentMessage = wa.getOutgoingQueueMessage(msgId) || wa.getMessages().find((item) => item.id === (res.messageId || msgId));
       return NextResponse.json({
         success: res.success,
+        queued: res.queued,
         message: res.message,
-        messages: wa.getClientMessages(),
+        sentMessage: sentMessage ? wa.toClientMessage(sentMessage) : null,
       });
     }
 

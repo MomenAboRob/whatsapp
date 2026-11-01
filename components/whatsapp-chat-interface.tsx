@@ -1265,6 +1265,8 @@ export function WhatsAppChatInterface({
   const [mentionParticipants, setMentionParticipants] = useState<{ chatKey: string; list: any[]; loading: boolean }>({ chatKey: '', list: [], loading: false });
   const [pendingMentions, setPendingMentions] = useState<{ name: string; jid: string }[]>([]);
   const [isSendingMsg, setIsSendingMsg] = useState<boolean>(false);
+  const isSendingMessageRef = useRef(false);
+  const pendingTextSendRef = useRef<{ id: string; chatKey: string; text: string } | null>(null);
   const [chatFilterTab, setChatFilterTab] = useState<string>('all');
   const [isChatFilterMenuOpen, setIsChatFilterMenuOpen] = useState(false);
   const chatFilterMenuRef = useRef<HTMLDivElement>(null);
@@ -1513,15 +1515,24 @@ export function WhatsAppChatInterface({
   const [editingMessage, setEditingMessage] = useState<any | null>(null);
   const [isEditingSaving, setIsEditingSaving] = useState<boolean>(false);
   const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
-  const messageInputRef = useRef<HTMLInputElement>(null);
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (!activeGroup) return;
     const frame = requestAnimationFrame(() => messageInputRef.current?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(frame);
   }, [activeGroup]);
   const getMessageText = () => messageInputRef.current?.value ?? '';
+  const fitMessageInput = (input: HTMLTextAreaElement | null) => {
+    if (!input) return;
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(input.scrollHeight, 128)}px`;
+    input.style.overflowY = input.scrollHeight > 128 ? 'auto' : 'hidden';
+  };
   const setMessageText = (value: string) => {
-    if (messageInputRef.current) messageInputRef.current.value = value;
+    if (messageInputRef.current) {
+      messageInputRef.current.value = value;
+      fitMessageInput(messageInputRef.current);
+    }
     setHasMessageText(Boolean(value.trim()));
   };
 
@@ -2466,10 +2477,7 @@ export function WhatsAppChatInterface({
 
       // سحب أي نص كان مكتوباً في خانة الرسالة لجعله تعليقاً على الصورة المرفقة
       const currentInputText = messageInputRef.current?.value?.trim() || '';
-      if (messageInputRef.current) {
-        messageInputRef.current.value = '';
-        setHasMessageText(false);
-      }
+      setMessageText('');
 
       // إعطاء اسم أنيق إذا كان الملف افتراضياً بدون اسم
       let finalFile = targetFile;
@@ -2618,10 +2626,7 @@ export function WhatsAppChatInterface({
     }
 
     const currentInputText = messageInputRef.current?.value?.trim() || '';
-    if (messageInputRef.current) {
-      messageInputRef.current.value = '';
-      setHasMessageText(false);
-    }
+    setMessageText('');
 
     const file = await extractFileFromDataTransfer(e.dataTransfer);
     if (file) {
@@ -3842,14 +3847,24 @@ export function WhatsAppChatInterface({
       const res = await fetch('/api/whatsapp/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'retry_message', messageId: msg.id }),
+        body: JSON.stringify({ action: 'retry_message', messageId: msg.id, message: msg }),
       });
       const data = await res.json();
+      if (data.sentMessage) {
+        setMessages((prev) => [
+          data.sentMessage,
+          ...prev.filter((item) =>
+            item.id !== msg.id &&
+            item.id !== data.sentMessage.id &&
+            item.id !== data.sentMessage.clientRequestId,
+          ),
+        ]);
+      } else if (data.messages && Array.isArray(data.messages)) {
+        setMessages(data.messages);
+      }
       if (data.success) {
-        toast.success('تم إرسال الرسالة بنجاح عبر واتساب!', 'تم الإرسال');
-        if (data.messages && Array.isArray(data.messages)) {
-          setMessages(data.messages);
-        }
+        if (data.queued) toast.info('أعيدت الرسالة إلى طابور الإرسال، وسيحاول الخادم إرسالها فوراً.', 'جاري الإرسال');
+        else toast.success('تم إرسال الرسالة بنجاح عبر واتساب!', 'تم الإرسال');
       } else {
         toast.error(data.message || 'فشل إرسال الرسالة المعلقة', 'خطأ في الإرسال');
       }
@@ -4628,6 +4643,8 @@ export function WhatsAppChatInterface({
     let isSubscribed = true;
     let lastResumeAt = Date.now();
     let lastAutoReconnectAt = 0;
+    let fallbackSyncInFlight = false;
+    let lastFallbackStatusAt = 0;
 
     // Restore the saved chat list immediately while the live server snapshot loads.
     void loadCachedOverview().then((cached) => {
@@ -4711,10 +4728,22 @@ export function WhatsAppChatInterface({
             const newMsg = JSON.parse(e.data);
             if (!newMsg || !newMsg.id) return;
 
+            const pendingDraft = pendingTextSendRef.current;
+            if (pendingDraft && newMsg.clientRequestId && pendingDraft.id === newMsg.clientRequestId) {
+              pendingTextSendRef.current = null;
+              if (activeGroupRef.current === pendingDraft.chatKey && getMessageText() === pendingDraft.text) {
+                setMessageText('');
+                setPendingMentions([]);
+                setMentionMenu(null);
+                setReplyingToMessage(null);
+              }
+            }
+
             setMessages((prev) => {
               const existingIdx = prev.findIndex(
                 (m) =>
                   m.id === newMsg.id ||
+                  (newMsg.clientRequestId && m.id === newMsg.clientRequestId) ||
                   (m.rawBaileysMessage?.key?.id && m.rawBaileysMessage.key.id === newMsg.id)
               );
               if (existingIdx !== -1) {
@@ -4981,14 +5010,20 @@ export function WhatsAppChatInterface({
     window.addEventListener('online', onOnline);
     window.addEventListener('pageshow', onPageShow);
 
-    // فحص احتياطي خفيف إذا انقطع اتصال الأحداث المباشر.
+    // فحص كل نصف ثانية للتغييرات الجديدة فقط عند انقطاع SSE؛ الاتصال المباشر يظل أسرع.
     const fallbackInterval = setInterval(() => {
-      if (!es && typeof document !== 'undefined' && !document.hidden) {
+      if (!es && typeof document !== 'undefined' && !document.hidden && !fallbackSyncInFlight) {
+        fallbackSyncInFlight = true;
         const snapshotAt = lastMessageSnapshotAtRef.current;
-        void fetchMessages(true, snapshotAt ? Math.max(1, snapshotAt - 5 * 60_000) : undefined, !snapshotAt);
-        void fetchWaStatus();
+        void fetchMessages(true, snapshotAt || undefined).finally(() => {
+          fallbackSyncInFlight = false;
+        });
+        if (Date.now() - lastFallbackStatusAt >= 15_000) {
+          lastFallbackStatusAt = Date.now();
+          void fetchWaStatus();
+        }
       }
-    }, 10000);
+    }, 500);
 
     return () => {
       isSubscribed = false;
@@ -6246,6 +6281,7 @@ export function WhatsAppChatInterface({
       if (typeof window !== 'undefined') window.close();
       return;
     }
+    activeGroupRef.current = '';
     setActiveGroup('');
     if (isMobileViewport() && window.history.state?.hawalatGuard) {
       window.history.back();
@@ -6254,7 +6290,7 @@ export function WhatsAppChatInterface({
 
   useEffect(() => {
     const onMobileBack = (event: Event) => {
-      const back = event as CustomEvent<{ scope: string; handled: boolean }>;
+      const back = event as CustomEvent<{ scope: string; handled: boolean; closedChat?: boolean }>;
       if (back.detail.scope !== 'whatsapp') return;
       if (lightboxState) closeLightbox();
       else if (avatarLightbox?.isOpen) setAvatarLightbox(null);
@@ -6280,13 +6316,32 @@ export function WhatsAppChatInterface({
       } else if (replyingToMessage) setReplyingToMessage(null);
       else if (editingMessage) setEditingMessage(null);
       else if (isEditingChatName) setIsEditingChatName(false);
-      else if (activeGroupRef.current) setActiveGroup('');
+      else if (activeGroupRef.current) {
+        activeGroupRef.current = '';
+        setActiveGroup('');
+        back.detail.closedChat = true;
+      }
       else return;
       back.detail.handled = true;
     };
+    const onBrowserBack = () => {
+      if (!isMobileViewport()) return;
+      const detail = { scope: 'whatsapp', handled: false, closedChat: false };
+      window.dispatchEvent(new CustomEvent('hawalat-mobile-back', { detail }));
+      // Keep one browser-back step for the still-open chat when this step only
+      // dismissed a menu or drawer. A second swipe then returns to the chat list.
+      if (detail.handled && !detail.closedChat && activeGroupRef.current) {
+        window.history.pushState(
+          { ...window.history.state, hawalatGuard: true, hawalatChatOpen: true },
+          '',
+        );
+      }
+    };
     window.addEventListener('hawalat-mobile-back', onMobileBack);
+    window.addEventListener('popstate', onBrowserBack);
     return () => {
       window.removeEventListener('hawalat-mobile-back', onMobileBack);
+      window.removeEventListener('popstate', onBrowserBack);
     };
   }, [lightboxState, avatarLightbox, mobileSheet, pendingMedia, isSendingMedia,
     isManagingListsModalOpen, isForwardModalOpen, isQuickRepliesModalOpen, isNewChatModalOpen,
@@ -7358,9 +7413,16 @@ export function WhatsAppChatInterface({
 
   const handleSendCustomMessage = async () => {
     const newMessageText = getMessageText();
-    if (!newMessageText.trim() || !activeGroup) return;
+    if (!newMessageText.trim() || !activeGroup || isSendingMessageRef.current) return;
+    isSendingMessageRef.current = true;
     setIsSendingMsg(true);
+    const sendForChat = activeGroup;
     const nowMs = Date.now();
+    const previousAttempt = pendingTextSendRef.current;
+    const requestId = previousAttempt?.chatKey === sendForChat && previousAttempt.text === newMessageText
+      ? previousAttempt.id
+      : `msg_real_${nowMs}`;
+    pendingTextSendRef.current = { id: requestId, chatKey: sendForChat, text: newMessageText };
 
     let quotedMsgPayload: any = undefined;
     if (replyingToMessage) {
@@ -7379,7 +7441,7 @@ export function WhatsAppChatInterface({
     const targetChatJid = targetGroup?.id || messages.find((m) => (m.chatName === activeGroup || m.senderName === activeGroup) && m.chatJid)?.chatJid;
 
     const newMsg = {
-      id: `msg_real_${nowMs}`,
+      id: requestId,
       sender: 'أنا',
       senderName: 'أنا',
       chatName: activeGroup,
@@ -7398,16 +7460,13 @@ export function WhatsAppChatInterface({
     const { wireText, mentions } = buildMentionPayload(newMsg.text);
 
     // 1. إظهار الرسالة فورياً في الشات مع علامة الساعة (Optimistic UI) كواتساب الحقيقي
-    setMessages((prev) => [newMsg, ...prev]);
-    setMessageText('');
-    setPendingMentions([]);
-    setMentionMenu(null);
-    setReplyingToMessage(null);
+    setMessages((prev) => [newMsg, ...prev.filter((item) => item.id !== newMsg.id)]);
     setTimeout(() => scrollToBottom('smooth'), 40);
 
     try {
       const res = await fetch('/api/whatsapp/messages', {
         method: 'POST',
+        keepalive: true,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'add',
@@ -7415,16 +7474,38 @@ export function WhatsAppChatInterface({
         }),
       });
       const data = await res.json();
-      if (res.ok && data.success) {
-        if (data.messages && Array.isArray(data.messages)) {
-          setMessages(data.messages);
-        }
-      } else {
-        toast.warning(data.message || 'تعذر إرسال الرسالة عبر واتساب حالياً، ستبقى قيد الانتظار', 'تنبيه الإرسال');
+      if (data.sentMessage) {
+        setMessages((prev) => [
+          data.sentMessage,
+          ...prev.filter((item) =>
+            item.id !== newMsg.id &&
+            item.id !== data.sentMessage.id &&
+            item.id !== data.sentMessage.clientRequestId,
+          ),
+        ]);
+      } else if (data.messages && Array.isArray(data.messages)) {
+        // توافق مؤقت مع النسخ القديمة من الخادم.
+        setMessages(data.messages);
       }
-    } catch (e: any) {
-      toast.error(`انقطع الاتصال أثناء الإرسال: ${e.message}`, 'تنبيه الاتصال');
+      if (!res.ok || !data.success) {
+        setMessages((prev) => prev.filter((item) => item.id !== newMsg.id));
+        if (pendingTextSendRef.current?.id === requestId) pendingTextSendRef.current = null;
+        toast.warning(data.message || 'لم يحفظ الخادم الرسالة. أبقيت النص في خانة الكتابة لتعيد المحاولة.', 'تعذر الإرسال');
+      } else {
+        if (activeGroupRef.current === sendForChat && getMessageText() === newMessageText) {
+          setMessageText('');
+          setPendingMentions([]);
+          setMentionMenu(null);
+          setReplyingToMessage(null);
+        } else {
+          setPendingMentions((previous) => previous.filter((item) => !mentions.includes(item.jid)));
+        }
+        if (pendingTextSendRef.current?.id === requestId) pendingTextSendRef.current = null;
+      }
+    } catch {
+      toast.error('لم يصل تأكيد الخادم بعد؛ أبقيت النص والرسالة كما هما. أعد الإرسال عند استقرار الاتصال.', 'تعذر تأكيد الإرسال');
     } finally {
+      isSendingMessageRef.current = false;
       setIsSendingMsg(false);
     }
   };
@@ -10101,7 +10182,7 @@ export function WhatsAppChatInterface({
               {attachmentMenuOpen && (
                 <div
                   ref={attachmentMenuRef}
-                  className="absolute bottom-12 right-0 bg-[#242626] border border-[#2e2f2f] rounded-2xl p-2.5 shadow-2xl z-50 flex flex-col gap-1.5 min-w-[210px] animate-in fade-in slide-in-from-bottom-3 duration-150"
+                  className="absolute bottom-12 left-0 right-auto bg-[#242626] border border-[#2e2f2f] rounded-2xl p-2.5 shadow-2xl z-50 flex flex-col gap-1.5 min-w-[210px] animate-in fade-in slide-in-from-bottom-3 duration-150"
                   onClick={(e) => e.stopPropagation()}
                 >
                   {/* 1. مستند أو ملف */}
@@ -10339,11 +10420,12 @@ export function WhatsAppChatInterface({
             <div
               onDragOver={handleDragOver}
               onDrop={handleDrop}
-              className="flex-1 flex items-center bg-[#2e2f2f] rounded-xl px-3 py-1.5 border border-[#3b3d3d] focus-within:border-[#21c063] transition-colors"
+              className="min-w-0 flex-1 flex items-end bg-[#2e2f2f] rounded-xl px-3 py-1.5 border border-[#3b3d3d] focus-within:border-[#21c063] transition-colors"
             >
-              <input
+              <textarea
                 ref={messageInputRef}
-                type="text"
+                rows={1}
+                dir="auto"
                 autoComplete="off"
                 enterKeyHint="send"
                 onPaste={handleClipboardPaste}
@@ -10351,6 +10433,7 @@ export function WhatsAppChatInterface({
                 onDrop={handleDrop}
                 onChange={(e) => {
                   const val = e.target.value;
+                  fitMessageInput(e.currentTarget);
                   // لا نحفظ النص في state (لتفادي إعادة رسم الشاشة مع كل حرف)، فقط نبدّل زر الإرسال عند الحاجة
                   const nextHasText = Boolean(val.trim());
                   if (nextHasText !== hasMessageText) setHasMessageText(nextHasText);
@@ -10447,7 +10530,7 @@ export function WhatsAppChatInterface({
                     ? `اكتب الرد على (${replyingToMessage.isFromMe || replyingToMessage.sender === 'أنا' ? 'أنت' : replyingToMessage.sender})...`
                     : `اكتب رسالة (أو اكتب / للردود الجاهزة) في (${resolvedActiveContactName})...`
                 }
-                className="w-full bg-transparent text-base md:text-xs text-[#fafafa] placeholder-[#a5a5a5] focus:outline-none"
+                className="max-h-32 min-h-6 w-full min-w-0 resize-none overflow-y-hidden whitespace-pre-wrap break-words bg-transparent text-base leading-6 text-[#fafafa] placeholder:text-[#a5a5a5] focus:outline-none"
               />
             </div>
             {!editingMessage && !isPopoutMode && onScheduleChat && /@(s\.whatsapp\.net|lid)$/.test(activeChatInfo?.id || activeGroupJid || activeGroup) && (

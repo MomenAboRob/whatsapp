@@ -1,4 +1,5 @@
 import path from 'path';
+import { dataPath } from '@/lib/data-storage';
 import fs from 'fs';
 import { EventEmitter } from 'events';
 import QRCode from 'qrcode';
@@ -28,6 +29,16 @@ const isViewOnceMessage = (message: any): boolean => {
 const viewOnceNotice = (fromMe: boolean): string => fromMe
   ? 'أرسلت رسالة للعرض مرة واحدة من جهاز آخر'
   : 'رسالة للعرض مرة واحدة';
+
+const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+};
 
 // واجهة الرسائل المعالجة
 export interface MemberReceipt {
@@ -160,6 +171,13 @@ export interface ChatMessage {
   deletedAt?: number;
 }
 
+type OutgoingQueueEntry = {
+  requestId: string;
+  status: 'pending' | 'sent';
+  message: ChatMessage;
+  updatedAt: number;
+};
+
 export function formatPhoneNumber(phone: string): string {
   if (!phone) return '';
   const clean = String(phone).replace(/\D/g, '');
@@ -239,12 +257,16 @@ export class WhatsAppManager {
   private qrCodeDataUrl: string | null = null;
   private connectionStatus: 'DISCONNECTED' | 'SCAN_QR' | 'CONNECTING' | 'CONNECTED' = 'DISCONNECTED';
   private incomingMessages: ChatMessage[] = [];
+  private outgoingQueue = new Map<string, OutgoingQueueEntry>();
+  private outgoingQueueWrite: Promise<void> = Promise.resolve();
+  private flushPendingAgain = false;
   private userGroups: WhatsAppGroupItem[] = [];
   private presences = new Map<string, Map<string, WhatsAppPresence>>();
   private presenceSubscriptions = new Map<string, number>();
   private connectedUser: { name: string; phone: string; jid: string } | null = null;
   public authDir: string;
   private messagesFilePath: string;
+  private outgoingQueueFilePath: string;
   private groupsFilePath: string;
   private contactsFilePath: string;
   private avatarsFilePath: string;
@@ -285,9 +307,6 @@ export class WhatsAppManager {
 
   private emitOutgoingMessage(message: ChatMessage): void {
     this.events.emit('message', message);
-    void import('@/lib/whatsapp-workspace')
-      .then(({ notifyOutgoingMessage }) => notifyOutgoingMessage(this, message))
-      .catch((error) => console.warn('تعذر تجهيز تنبيه الرسالة الصادرة:', error));
   }
 
   private acquireLock(): boolean {
@@ -363,7 +382,7 @@ export class WhatsAppManager {
   private constructor(userId: string = 'recmrgqBhC2YImlC0') {
     this.userId = userId || 'recmrgqBhC2YImlC0';
     const cleanId = this.userId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const baseAuthDir = path.join(process.cwd(), 'whatsapp_auth');
+    const baseAuthDir = dataPath('whatsapp_auth');
     this.authDir = path.join(baseAuthDir, `user_${cleanId}`);
     this.avatarSyncStateFilePath = path.join(this.authDir, 'avatar_sync_state.json');
     try {
@@ -410,11 +429,12 @@ export class WhatsAppManager {
 
     this.lockFilePath = path.join(this.authDir, 'session.lock');
     this.messagesFilePath = path.join(this.authDir, 'stored_messages.json');
+    this.outgoingQueueFilePath = path.join(this.authDir, 'outgoing_queue.json');
     this.groupsFilePath = path.join(this.authDir, 'stored_groups.json');
     this.contactsFilePath = path.join(this.authDir, 'stored_contacts.json');
     this.avatarsFilePath = path.join(this.authDir, 'stored_avatars.json');
-    this.avatarsDir = path.join(process.cwd(), 'whatsapp_avatars');
-    this.mediaDir = path.join(process.cwd(), 'whatsapp_media');
+    this.avatarsDir = dataPath('whatsapp_avatars');
+    this.mediaDir = dataPath('whatsapp_media');
 
     if (!fs.existsSync(this.avatarsDir)) {
       try {
@@ -511,7 +531,7 @@ export class WhatsAppManager {
     return Array.from(globalObj.__waManagerInstances.values());
   }
 
-  private static sharedMetaFilePath = path.join(process.cwd(), 'whatsapp_auth', 'shared_message_meta.json');
+  private static sharedMetaFilePath = dataPath('whatsapp_auth', 'shared_message_meta.json');
 
   public static getSharedMeta(): Record<string, { linkedReceiptUrl?: string; linkedMsgId?: string; status?: any; updatedAt: number }> {
     try {
@@ -567,7 +587,7 @@ export class WhatsAppManager {
   public static initAllSessions(): void {
     if (process.env.WHATSAPP_AUTO_CONNECT === '0') return;
     try {
-      const baseAuthDir = path.join(process.cwd(), 'whatsapp_auth');
+      const baseAuthDir = dataPath('whatsapp_auth');
       if (!fs.existsSync(baseAuthDir)) return;
 
       // تهيئة جلسة المستخدم الأساسي
@@ -1621,7 +1641,7 @@ export class WhatsAppManager {
 
       // تصحيح ملفات الفيديو والملصقات المخزنة محلياً إذا كان امتدادها .jpg خطأً
       if (m.mediaUrl && m.mediaUrl.endsWith('.jpg')) {
-        const publicMediaDir = path.join(process.cwd(), 'public', 'media');
+        const publicMediaDir = dataPath('public', 'media');
         const oldFile = fs.existsSync(path.join(this.mediaDir, path.basename(m.mediaUrl)))
           ? path.join(this.mediaDir, path.basename(m.mediaUrl))
           : path.join(publicMediaDir, path.basename(m.mediaUrl));
@@ -1912,7 +1932,7 @@ export class WhatsAppManager {
         const raw = fs.readFileSync(this.messagesFilePath, 'utf-8');
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          const publicMediaDir = path.join(process.cwd(), 'public', 'media');
+          const publicMediaDir = dataPath('public', 'media');
           const existingExts = ['webp', 'jpg', 'png', 'mp4', 'ogg', 'm4a', 'mp3', 'pdf'];
           const mediaPriority = new Map(existingExts.map((ext, index) => [ext, index]));
           const mediaIndex = new Map<string, { ext: string; priority: number; sourcePriority: number }>();
@@ -1996,12 +2016,132 @@ export class WhatsAppManager {
           });
         }
       }
+      this.loadOutgoingQueue();
       this.syncStoredContacts();
       // The saved snapshot is already on disk. Avoid serializing the full history again
       // during startup unless a later update actually changes it.
     } catch (e) {
       console.error('خطأ في قراءة ملفات واتساب المخزنة:', e);
     }
+  }
+
+  private loadOutgoingQueue(): void {
+    try {
+      if (!fs.existsSync(this.outgoingQueueFilePath)) return;
+      const parsed = JSON.parse(fs.readFileSync(this.outgoingQueueFilePath, 'utf8'));
+      if (!Array.isArray(parsed)) return;
+
+      const persistedIds = new Set(this.incomingMessages.map((message) => message.id));
+      let queueChanged = false;
+      let messagesNeedPersistence = false;
+      for (const rawEntry of parsed) {
+        if (!rawEntry?.message || typeof rawEntry.message.id !== 'string') continue;
+        const requestId = typeof rawEntry.requestId === 'string' ? rawEntry.requestId : rawEntry.message.id;
+        const entry: OutgoingQueueEntry = {
+          requestId,
+          status: rawEntry.status === 'sent' ? 'sent' : 'pending',
+          message: rawEntry.message,
+          updatedAt: Number(rawEntry.updatedAt) || Date.now(),
+        };
+        const alreadySentMessage = this.incomingMessages.find(
+          (message) => message.id === entry.message.id || message.clientRequestId === requestId,
+        );
+        if (alreadySentMessage && (alreadySentMessage.id !== requestId || alreadySentMessage.deliveryStatus === 'sent')) {
+          entry.status = 'sent';
+          entry.message = alreadySentMessage;
+          entry.updatedAt = Date.now();
+          queueChanged = true;
+        }
+        const existingIndex = this.incomingMessages.findIndex(
+          (message) => message.id === requestId || message.id === entry.message.id,
+        );
+
+        if (entry.status === 'sent') {
+          if (persistedIds.has(entry.message.id)) {
+            queueChanged = true;
+            continue;
+          }
+          if (existingIndex >= 0) this.incomingMessages.splice(existingIndex, 1);
+          this.incomingMessages.unshift(entry.message);
+          messagesNeedPersistence = true;
+        } else if (existingIndex >= 0) {
+          this.incomingMessages[existingIndex] = { ...this.incomingMessages[existingIndex], ...entry.message };
+        } else {
+          this.incomingMessages.unshift(entry.message);
+        }
+
+        this.outgoingQueue.set(requestId, entry);
+      }
+
+      if (queueChanged) void this.persistOutgoingQueue();
+      if (messagesNeedPersistence) this.persistData();
+    } catch (error) {
+      console.error('تعذر استعادة طابور الرسائل الصادرة:', error);
+    }
+  }
+
+  private persistOutgoingQueue(): Promise<void> {
+    const operation = this.outgoingQueueWrite.catch(() => {}).then(async () => {
+      const temporaryPath = `${this.outgoingQueueFilePath}.tmp`;
+      await fs.promises.writeFile(temporaryPath, JSON.stringify([...this.outgoingQueue.values()]), 'utf8');
+      await fs.promises.rename(temporaryPath, this.outgoingQueueFilePath);
+    });
+    this.outgoingQueueWrite = operation;
+    return operation;
+  }
+
+  private schedulePendingQueueFlush(): void {
+    setImmediate(() => {
+      if (this.isFlushingQueue) {
+        this.flushPendingAgain = true;
+        return;
+      }
+      void this.flushPendingMessages().catch((error) => {
+        console.error('تعذر تشغيل طابور الرسائل الصادرة:', error);
+      });
+    });
+  }
+
+  public async enqueueOutgoingMessage(message: ChatMessage): Promise<ChatMessage> {
+    const enqueueStartedAt = Date.now();
+    const requestId = message.id || `msg_real_${Date.now()}`;
+    const existingEntry = this.outgoingQueue.get(requestId);
+    if (existingEntry) {
+      if (existingEntry.status === 'pending') this.schedulePendingQueueFlush();
+      return existingEntry.message;
+    }
+
+    const queuedMessage: ChatMessage = {
+      ...message,
+      id: requestId,
+      timestampMs: message.timestampMs || Date.now(),
+      isFromMe: true,
+      sender: 'أنا',
+      senderName: 'أنا',
+      deliveryStatus: 'pending',
+    };
+    const existingIndex = this.incomingMessages.findIndex((item) => item.id === requestId);
+    if (existingIndex >= 0) this.incomingMessages[existingIndex] = queuedMessage;
+    else this.incomingMessages.unshift(queuedMessage);
+
+    this.outgoingQueue.set(requestId, {
+      requestId,
+      status: 'pending',
+      message: queuedMessage,
+      updatedAt: Date.now(),
+    });
+
+    // Write the small outbox journal before acknowledging the browser. The full chat history
+    // snapshot is much larger and is flushed separately without delaying this acceptance.
+    await this.persistOutgoingQueue();
+    console.log(`[WhatsApp] تم حفظ رسالة صادرة في الطابور خلال ${Date.now() - enqueueStartedAt}ms.`);
+    this.emitOutgoingMessage(queuedMessage);
+    if (this.connectionStatus === 'CONNECTED') this.schedulePendingQueueFlush();
+    return queuedMessage;
+  }
+
+  public getOutgoingQueueMessage(requestId: string): ChatMessage | undefined {
+    return this.outgoingQueue.get(requestId)?.message;
   }
 
   public persistContacts() {
@@ -2131,6 +2271,16 @@ export class WhatsAppManager {
       writeNext();
     });
     await fs.promises.rename(temporaryPath, this.messagesFilePath);
+
+    const persistedIds = new Set(messages.map((message) => message.id));
+    let queueChanged = false;
+    for (const [requestId, entry] of this.outgoingQueue) {
+      if (entry.status === 'sent' && persistedIds.has(entry.message.id)) {
+        this.outgoingQueue.delete(requestId);
+        queueChanged = true;
+      }
+    }
+    if (queueChanged) await this.persistOutgoingQueue();
   }
 
   private persistGroupsImmediate(): void {
@@ -2230,7 +2380,8 @@ export class WhatsAppManager {
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        // Keep the accepted Chrome web profile; the legacy Desktop sub-platform now returns 428 before QR.
+        // The current WhatsApp handshake rejects Baileys' legacy Desktop web sub-platform
+        // before QR generation. Keep the accepted Chrome web profile for reliable pairing.
         browser: Browsers.ubuntu('Chrome'),
         version: latestVersion.version,
         // Full history is requested only when linking this companion device by QR.
@@ -2343,7 +2494,6 @@ export class WhatsAppManager {
           this.events.emit('status', this.getStatus());
 
           this.syncGroups(true).catch(() => {});
-          this.flushPendingMessages().catch(() => {});
           setTimeout(() => {
             this.flushPendingMessages().catch(() => {});
             this.syncMissingMedia().catch(() => {});
@@ -3227,7 +3377,7 @@ export class WhatsAppManager {
 
   private async downloadMediaOnce(id: string, msg: any, content?: any): Promise<string | undefined> {
     // 1. فحص فوري: إذا كان الملف محملاً مسبقاً على القرص، إرجاعه مباشرة وتحديث الرسالة
-    const publicMediaDir = path.join(process.cwd(), 'public', 'media');
+    const publicMediaDir = dataPath('public', 'media');
     const existingExts = ['webp', 'jpg', 'png', 'mp4', 'ogg', 'm4a', 'mp3', 'pdf'];
     for (const e of existingExts) {
       const p = path.join(this.mediaDir, `${id}.${e}`);
@@ -3540,7 +3690,7 @@ export class WhatsAppManager {
     if (!m.isViewOnce && !effectiveMediaUrl && m.hasMedia) {
       const ext = m.mediaType === 'sticker' ? 'webp' : m.mediaType === 'video' ? 'mp4' : ['audio', 'voice'].includes(m.mediaType || '') ? 'm4a' : m.mediaType === 'document' ? 'pdf' : 'jpg';
       const storageFile = path.join(this.mediaDir, `${m.id}.${ext}`);
-      const publicMediaDir = path.join(process.cwd(), 'public', 'media');
+    const publicMediaDir = dataPath('public', 'media');
       const publicFile = path.join(publicMediaDir, `${m.id}.${ext}`);
       if (fs.existsSync(storageFile) || fs.existsSync(publicFile)) {
         effectiveMediaUrl = `/media/${m.id}.${ext}`;
@@ -3739,15 +3889,20 @@ export class WhatsAppManager {
    * إعادة إرسال الرسائل المعلقة في طابور الانتظار (Offline Queue) تلقائياً بمجرد عودة الاتصال
    */
   public async flushPendingMessages(): Promise<void> {
-    if (!this.sock || this.connectionStatus !== 'CONNECTED' || this.isFlushingQueue) return;
+    if (!this.sock || this.connectionStatus !== 'CONNECTED') return;
+    if (this.isFlushingQueue) {
+      this.flushPendingAgain = true;
+      return;
+    }
     this.isFlushingQueue = true;
 
     try {
       const pending = this.incomingMessages.filter(
         (m) =>
           (m.isFromMe || m.sender === 'أنا' || m.senderName === 'أنا') &&
-          (m.deliveryStatus === 'pending' || (typeof m.id === 'string' && (m.id.startsWith('msg_real_') || m.id.startsWith('temp_'))))
-      );
+          typeof m.id === 'string' &&
+          (m.id.startsWith('msg_real_') || m.id.startsWith('temp_'))
+      ).sort((a, b) => (a.timestampMs || 0) - (b.timestampMs || 0));
 
       if (pending.length === 0) return;
       console.log(`[WhatsApp] جاري إرسال وتفريغ (${pending.length}) رسائل معلقة في طابور الانتظار...`);
@@ -3757,15 +3912,33 @@ export class WhatsAppManager {
           const targetChat = msg.chatJid || msg.chatName;
           if (!targetChat) continue;
 
+          const queuedAt = this.outgoingQueue.get(msg.id)?.updatedAt || msg.timestampMs || Date.now();
+          const sendStartedAt = Date.now();
+          console.log(`[WhatsApp] بدء معالجة رسالة صادرة من الطابور بعد ${Math.max(0, sendStartedAt - queuedAt)}ms.`);
           const res = await this.forwardMessage(
             targetChat,
             msg.text || '',
             msg.mediaUrl,
             msg.quotedMessage?.id,
             msg.quotedMessage,
-            msg.id
+            msg.id,
+            Array.isArray((msg as any).mentions)
+              ? (msg as any).mentions.filter((jid: unknown) => typeof jid === 'string')
+              : undefined,
           );
+          console.log(`[WhatsApp] انتهت محاولة الإرسال خلال ${Date.now() - sendStartedAt}ms.`);
           if (res.success) {
+            const queueEntry = this.outgoingQueue.get(msg.id);
+            const sentMessage = this.incomingMessages.find((item) => item.id === res.messageId);
+            if (queueEntry && sentMessage) {
+              this.outgoingQueue.set(msg.id, {
+                ...queueEntry,
+                status: 'sent',
+                message: sentMessage,
+                updatedAt: Date.now(),
+              });
+              await this.persistOutgoingQueue();
+            }
             console.log(`[WhatsApp] تم إرسال الرسالة المعلقة بنجاح: ${msg.id} -> ${res.messageId}`);
           }
         } catch (err) {
@@ -3774,17 +3947,19 @@ export class WhatsAppManager {
       }
     } finally {
       this.isFlushingQueue = false;
+      if (this.flushPendingAgain && this.sock && this.connectionStatus === 'CONNECTED') {
+        this.flushPendingAgain = false;
+        this.schedulePendingQueueFlush();
+      }
     }
   }
 
   /**
    * إعادة محاولة إرسال رسالة معلقة محددة فوراً
    */
-  public async retryPendingMessage(msgId: string): Promise<{ success: boolean; message: string; messageId?: string }> {
-    if (!this.sock || this.connectionStatus !== 'CONNECTED') {
-      return { success: false, message: 'واتساب غير متصل حالياً بالسيرفر' };
-    }
-    const msg = this.incomingMessages.find((m) => m.id === msgId);
+  public async retryPendingMessage(msgId: string, fallbackMessage?: ChatMessage): Promise<{ success: boolean; message: string; messageId?: string; queued?: boolean }> {
+    const msg = this.incomingMessages.find((m) => m.id === msgId) ||
+      (fallbackMessage?.id === msgId ? fallbackMessage : undefined);
     if (!msg) {
       return { success: false, message: 'الرسالة غير موجودة في السجل' };
     }
@@ -3792,14 +3967,16 @@ export class WhatsAppManager {
     if (!targetChat) {
       return { success: false, message: 'تعذر تحديد المحادثة المستهدفة للرسالة' };
     }
-    return await this.forwardMessage(
-      targetChat,
-      msg.text || '',
-      msg.mediaUrl,
-      msg.quotedMessage?.id,
-      msg.quotedMessage,
-      msg.id
-    );
+    const queuedMessage = await this.enqueueOutgoingMessage({ ...msg, id: msgId, deliveryStatus: 'pending' });
+    const entry = this.outgoingQueue.get(msgId);
+    return {
+      success: true,
+      queued: entry?.status !== 'sent',
+      messageId: entry?.status === 'sent' ? queuedMessage.id : undefined,
+      message: entry?.status === 'sent'
+        ? 'تم إرسال الرسالة مسبقاً.'
+        : 'أعيدت الرسالة إلى طابور الإرسال وسيحاول الخادم إرسالها فوراً.',
+    };
   }
 
   public updateMessageStatus(id: string, updates: Partial<ChatMessage['status']> & { linkedReceiptUrl?: string | null; linkedMsgId?: string | null }) {
@@ -4059,7 +4236,7 @@ export class WhatsAppManager {
     // المنشن: معرفات الأعضاء المذكورين (النص يحتوي @رقم لكل منهم كما يشترط واتساب)
     mentions?: string[]
   ): Promise<{ success: boolean; message: string; messageId?: string }> {
-    if (!this.sock || this.connectionStatus !== 'CONNECTED') {
+    if (!this.sock || this.connectionStatus !== 'CONNECTED' || this.sock.ws?.isOpen === false) {
       return {
         success: false,
         message: 'واتساب غير متصل حالياً. يرجى مسح رمز QR أولاً.',
@@ -4082,6 +4259,11 @@ export class WhatsAppManager {
         quotedMsgId,
         quotedPayload
       );
+      const stableSendOptions = existingMessageId
+        ? { ...sendOptions, messageId: existingMessageId }
+        : sendOptions;
+      const sendTimeoutMs = mediaBase64 ? 90_000 : 30_000;
+      const sendTimeoutMessage = 'لم يصل تأكيد واتساب خلال المهلة المحددة؛ بقيت الرسالة معلقة لإعادة المحاولة.';
 
       // 2. إذا كان هناك صورة أو ملف وسائط مرفق
       if (
@@ -4106,35 +4288,35 @@ export class WhatsAppManager {
         }
 
         if (imageBuf) {
-          sentMsg = await this.sock.sendMessage(
+            sentMsg = await withTimeout(this.sock.sendMessage(
             targetJid,
             {
               image: imageBuf,
               caption: messageText || '',
               ...mentionOpts,
             },
-            sendOptions
-          );
+              stableSendOptions
+            ), sendTimeoutMs, sendTimeoutMessage);
         } else {
-          sentMsg = await this.sock.sendMessage(
+            sentMsg = await withTimeout(this.sock.sendMessage(
             targetJid,
             {
               text: messageText,
               ...mentionOpts,
             },
-            sendOptions
-          );
+              stableSendOptions
+            ), sendTimeoutMs, sendTimeoutMessage);
         }
       } else {
         // رسالة نصية بحتة
-        sentMsg = await this.sock.sendMessage(
+          sentMsg = await withTimeout(this.sock.sendMessage(
           targetJid,
           {
             text: messageText,
             ...mentionOpts,
           },
-          sendOptions
-        );
+            stableSendOptions
+          ), sendTimeoutMs, sendTimeoutMessage);
       }
 
       const msgId = sentMsg?.key?.id || `sent_${Date.now()}`;
@@ -4147,6 +4329,7 @@ export class WhatsAppManager {
           this.incomingMessages[existingIdx] = {
             ...this.incomingMessages[existingIdx],
             id: msgId,
+            clientRequestId: existingMessageId,
             chatName: groupName,
             chatJid: chatJid,
             deliveryStatus: 'sent',
@@ -4173,6 +4356,7 @@ export class WhatsAppManager {
 
       const newSentMessage: ChatMessage = {
         id: msgId,
+        clientRequestId: existingMessageId,
         sender: 'أنا',
         senderName: 'أنا',
         // عرض المنشن بالاسم بدل الرقم داخل البرنامج
@@ -4199,6 +4383,7 @@ export class WhatsAppManager {
       if (existingIdx !== -1) {
         this.incomingMessages[existingIdx] = {
           ...this.incomingMessages[existingIdx],
+          clientRequestId: existingMessageId || this.incomingMessages[existingIdx].clientRequestId,
           hasMedia: Boolean(resolvedMediaUrl) || this.incomingMessages[existingIdx].hasMedia,
           mediaUrl: resolvedMediaUrl || this.incomingMessages[existingIdx].mediaUrl,
           mediaType: resolvedMediaUrl ? 'image' : this.incomingMessages[existingIdx].mediaType,
@@ -4471,7 +4656,7 @@ export class WhatsAppManager {
       if (fs.existsSync(storageMedia)) return `/media/${filename}`;
       const storageAvatar = path.join(this.avatarsDir, filename);
       if (fs.existsSync(storageAvatar)) return `/avatars/${filename}`;
-      const mediaDiskPath = path.join(process.cwd(), 'public', 'media', filename);
+      const mediaDiskPath = dataPath('public', 'media', filename);
       if (fs.existsSync(mediaDiskPath)) return `/media/${filename}`;
     }
     if (clean.startsWith('/media/') || clean.startsWith('/avatars/')) return clean;
