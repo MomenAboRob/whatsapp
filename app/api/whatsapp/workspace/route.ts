@@ -49,7 +49,10 @@ export async function POST(req: NextRequest) {
   const user = getAuthUserFromRequest(req);
   if (!user) return bad('غير مصرح', 401);
   const origin = req.headers.get('origin');
-  if (origin && origin !== req.nextUrl.origin) return bad('مصدر الطلب غير صالح', 403);
+  const forwardedHost = req.headers.get('x-forwarded-host') || req.headers.get('host');
+  const forwardedProto = req.headers.get('x-forwarded-proto') || req.nextUrl.protocol.replace(':', '');
+  const expectedOrigin = forwardedHost ? `${forwardedProto}://${forwardedHost}` : req.nextUrl.origin;
+  if (origin && origin !== expectedOrigin) return bad('مصدر الطلب غير صالح', 403);
   const wa = getWhatsAppManager(req);
   let body: Record<string, unknown>;
   try {
