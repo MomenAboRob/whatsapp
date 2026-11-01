@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'crypto';
 import nodemailer from 'nodemailer';
+import webpush from 'web-push';
 import type { ChatMessage, WhatsAppManager } from '@/lib/whatsapp-client';
 import { rawWhatsAppText } from '@/lib/whatsapp-message-text';
 import { renderMentionEmail } from '@/lib/mention-email';
@@ -91,6 +92,7 @@ const notifiedOutgoingIds = new Set<string>();
 
 const cleanUserId = (userId: string) => userId.replace(/[^a-zA-Z0-9_-]/g, '_');
 const dataPath = (userId: string) => path.join(process.cwd(), 'whatsapp_auth', `user_${cleanUserId(userId)}`, 'workspace.json');
+const pushSubscriptionsPath = (userId: string) => path.join(process.cwd(), 'whatsapp_auth', `user_${cleanUserId(userId)}`, 'push_subscriptions.json');
 const initialData = (): WorkspaceData => ({
   mentions: [],
   messageTasks: [],
@@ -255,9 +257,69 @@ function smtpTransport(settings: WorkspaceSettings) {
   return { transporter, user, custom };
 }
 
+type StoredPushSubscription = {
+  endpoint: string;
+  expirationTime?: number | null;
+  keys: { p256dh: string; auth: string };
+};
+
+export function getPushPublicKey(): string {
+  return process.env.WEB_PUSH_PUBLIC_KEY || '';
+}
+
+export function savePushSubscription(userId: string, subscription: StoredPushSubscription): void {
+  if (!/^https:\/\//.test(subscription.endpoint) || !subscription.keys?.p256dh || !subscription.keys?.auth) {
+    throw new Error('بيانات إشعار الهاتف غير صالحة');
+  }
+  const file = pushSubscriptionsPath(userId);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  let subscriptions: StoredPushSubscription[] = [];
+  try { subscriptions = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+  subscriptions = subscriptions.filter((entry) => entry.endpoint !== subscription.endpoint);
+  subscriptions.push(subscription);
+  fs.writeFileSync(file, JSON.stringify(subscriptions), { mode: 0o600 });
+}
+
+export function removePushSubscription(userId: string, endpoint: string): void {
+  const file = pushSubscriptionsPath(userId);
+  try {
+    const subscriptions: StoredPushSubscription[] = JSON.parse(fs.readFileSync(file, 'utf8'));
+    fs.writeFileSync(file, JSON.stringify(subscriptions.filter((entry) => entry.endpoint !== endpoint)), { mode: 0o600 });
+  } catch {}
+}
+
+async function sendIncomingPush(wa: WhatsAppManager, message: ChatMessage): Promise<void> {
+  if (!message.id || !process.env.WEB_PUSH_PUBLIC_KEY || !process.env.WEB_PUSH_PRIVATE_KEY) return;
+  if (!readWorkspace(wa.userId).settings.browserEnabled) return;
+  const file = pushSubscriptionsPath(wa.userId);
+  let subscriptions: StoredPushSubscription[];
+  try { subscriptions = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return; }
+  if (!subscriptions.length) return;
+  try {
+    webpush.setVapidDetails(process.env.WEB_PUSH_SUBJECT || 'mailto:admin@example.com', process.env.WEB_PUSH_PUBLIC_KEY, process.env.WEB_PUSH_PRIVATE_KEY);
+  } catch (error) {
+    console.warn('إعداد إشعارات الهاتف غير صالح:', error);
+    return;
+  }
+  const chatName = message.chatName || 'محادثة واتساب';
+  const body = `${message.senderName || message.sender || chatName}: ${message.text || (message.hasMedia ? 'رسالة وسائط' : 'رسالة جديدة')}`.slice(0, 220);
+  const payload = JSON.stringify({ title: `رسالة جديدة · ${chatName}`, body, tag: `whatsapp-${message.chatJid || chatName}`, url: '/' });
+  const expired = new Set<string>();
+  await Promise.all(subscriptions.map(async (subscription) => {
+    try { await webpush.sendNotification(subscription, payload, { TTL: 60 * 60 }); }
+    catch (error: any) { if (error?.statusCode === 404 || error?.statusCode === 410) expired.add(subscription.endpoint); }
+  }));
+  if (expired.size) {
+    const remaining = subscriptions.filter((subscription) => !expired.has(subscription.endpoint));
+    if (remaining.length) fs.writeFileSync(file, JSON.stringify(remaining), { mode: 0o600 });
+    else fs.rmSync(file, { force: true });
+  }
+}
+
 /** Notify the account owner after a WhatsApp send succeeds. Never sends to chat recipients. */
 export async function notifyOutgoingMessage(wa: WhatsAppManager, message: ChatMessage): Promise<void> {
   if (!message.isFromMe || !message.id || notifiedOutgoingIds.has(message.id)) return;
+  void sendIncomingPush(wa, message);
   const settings = readWorkspace(wa.userId).settings;
   if (!settings.emailEnabled || !settings.emailTo || !smtpConfigured(settings)) return;
   notifiedOutgoingIds.add(message.id);
@@ -299,6 +361,7 @@ async function sendMentionEmail(mention: MentionItem, settings: WorkspaceSetting
 }
 
 export async function recordLiveMention(wa: WhatsAppManager, message: ChatMessage): Promise<void> {
+  void sendIncomingPush(wa, message);
   if (!isMentionForMe(message, wa)) return;
   const data = readWorkspace(wa.userId);
   if (data.mentions.some((item) => item.id === message.id)) return;

@@ -380,7 +380,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'sync_avatars') {
-      const result = await wa.syncAvatars();
+      const result = await wa.syncAvatars(true);
       return NextResponse.json({
         success: true,
         total: result.total,

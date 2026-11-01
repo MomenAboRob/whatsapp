@@ -13,6 +13,7 @@ export function WorkspaceNotificationSettings() {
   const [verified, setVerified] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [pushEnabled, setPushEnabled] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -48,10 +49,43 @@ export function WorkspaceNotificationSettings() {
 
   const enableBrowser = async () => {
     if (!('Notification' in window)) { setError('هذا المتصفح لا يدعم إشعارات سطح المكتب'); return; }
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true;
+    if (isIOS && !isStandalone) { setError('على الآيفون أضف التطبيق إلى الشاشة الرئيسية أولاً، ثم افتحه منها وفعّل الإشعارات.'); return; }
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') { setError('اسمح بالإشعارات من إعدادات المتصفح أولًا'); return; }
-    setSettings((current) => ({ ...current, browserEnabled: true }));
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) { setError('هذا المتصفح لا يدعم إشعارات الهاتف بالخلفية'); return; }
+    setBusy(true); setError('');
+    try {
+      const configResponse = await fetch('/api/whatsapp/push', { cache: 'no-store' });
+      const config = await configResponse.json();
+      if (!config.publicKey) throw new Error('مفتاح إشعارات الهاتف غير مضبوط على الخادم');
+      const registration = await navigator.serviceWorker.ready;
+      let subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        const padding = '='.repeat((4 - config.publicKey.length % 4) % 4);
+        const raw = atob(config.publicKey.replace(/-/g, '+').replace(/_/g, '/') + padding);
+        const applicationServerKey = Uint8Array.from(raw, (char) => char.charCodeAt(0));
+        subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+      }
+      const response = await fetch('/api/whatsapp/push', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription: subscription.toJSON() }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'تعذر ربط إشعارات الهاتف');
+      setPushEnabled(true);
+      setSettings((current) => ({ ...current, browserEnabled: true }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تفعيل إشعارات الهاتف');
+    } finally { setBusy(false); }
   };
+
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    void navigator.serviceWorker.ready.then((registration) => registration.pushManager.getSubscription())
+      .then((subscription) => setPushEnabled(Boolean(subscription))).catch(() => {});
+  }, []);
   const verify = async () => {
     setVerifying(true); setError(''); setVerified(false);
     try {
@@ -69,9 +103,9 @@ export function WorkspaceNotificationSettings() {
 
   return <div className="space-y-5 text-sm">
     <div className="rounded-2xl border border-[#2e2f2f] bg-[#1c1d1d] p-4">
-      <div className="mb-4 flex items-center gap-2 font-bold"><Bell className="h-5 w-5 text-[#21c063]" />تنبيهات المنشنات</div>
-      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl bg-[#161717] p-3"><span>إشعار من التطبيق عند وصول منشن جديد</span><input type="checkbox" checked={settings.browserEnabled} onChange={(event) => setSettings((current) => ({ ...current, browserEnabled: event.target.checked }))} className="h-4 w-4 accent-[#21c063]" /></label>
-      <button type="button" onClick={() => void enableBrowser()} className="mt-2 text-xs font-semibold text-[#21c063] hover:underline">السماح بإشعارات المتصفح</button>
+      <div className="mb-4 flex items-center gap-2 font-bold"><Bell className="h-5 w-5 text-[#21c063]" />تنبيهات الرسائل والمنشنات</div>
+      <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl bg-[#161717] p-3"><span>إشعارات الهاتف عند وصول رسائل أو منشنات</span><input type="checkbox" checked={settings.browserEnabled} onChange={(event) => setSettings((current) => ({ ...current, browserEnabled: event.target.checked }))} className="h-4 w-4 accent-[#21c063]" /></label>
+      <button type="button" onClick={() => void enableBrowser()} disabled={busy} className="mt-2 inline-flex items-center gap-2 rounded-lg bg-[#21c063] px-3 py-2 text-xs font-bold text-[#092116] disabled:opacity-60">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bell className="h-4 w-4" />}{pushEnabled ? 'إشعارات الهاتف مفعّلة' : 'تفعيل إشعارات الهاتف عند وصول الرسائل'}</button>
       <label className="mt-3 flex cursor-pointer items-center justify-between gap-3 rounded-xl bg-[#161717] p-3"><span>إرسال إيميل عند وصول منشن جديد</span><input type="checkbox" checked={settings.emailEnabled} onChange={(event) => setSettings((current) => ({ ...current, emailEnabled: event.target.checked }))} className="h-4 w-4 accent-[#21c063]" /></label>
       <label className="mt-3 block text-xs text-[#a5a5a5]">الإيميل المستلم<input type="email" value={settings.emailTo} onChange={(event) => setSettings((current) => ({ ...current, emailTo: event.target.value }))} className="mt-1 w-full rounded-lg border border-[#39443c] bg-[#111716] p-2.5 text-sm text-white outline-none" /></label>
     </div>

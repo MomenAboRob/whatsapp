@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { FileDigit, LayoutDashboard, MessageSquare, Send, Settings } from 'lucide-react';
 import { WhatsAppWorkspace } from '@/components/whatsapp-workspace';
 import { WhatsAppNumberCenter } from '@/components/whatsapp-number-center';
+import { PhonePushPrompt } from '@/components/phone-push-prompt';
 
 const WhatsAppChatInterface = dynamic(
   () => import('@/components/whatsapp-chat-interface').then((module) => module.WhatsAppChatInterface),
@@ -106,6 +107,7 @@ export default function HomePage() {
         <div className="flex-1" />
         <NavButton active={false} onClick={() => setIsSettingsOpen(true)} icon={Settings}>الإعدادات</NavButton>
       </nav>}
+      {!popoutChat && <PhonePushPrompt />}
       <div className={`min-h-0 flex-1 ${view === 'whatsapp' || popoutChat ? 'block' : 'hidden'}`}>
         <WhatsAppChatInterface
           isPopoutMode={Boolean(popoutChat)}

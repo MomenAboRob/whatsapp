@@ -1,5 +1,5 @@
 // Hawalat App - Minimal High-Performance Service Worker for PWA
-const CACHE_NAME = 'hawalat-pwa-v4';
+const CACHE_NAME = 'hawalat-pwa-v5';
 const STATIC_ASSETS = [
   '/manifest.webmanifest',
   '/manifest.json',
@@ -9,6 +9,31 @@ const STATIC_ASSETS = [
   '/icon.png',
   '/favicon.ico',
 ];
+
+self.addEventListener('push', (event) => {
+  let payload = {};
+  try { payload = event.data ? event.data.json() : {}; } catch {}
+  const title = payload.title || 'رسالة واتساب جديدة';
+  event.waitUntil(self.registration.showNotification(title, {
+    body: payload.body || 'وصلتك رسالة جديدة',
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    tag: payload.tag || `whatsapp-${Date.now()}`,
+    data: { url: payload.url || '/' },
+    dir: 'rtl',
+    lang: 'ar',
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data?.url || '/', self.location.origin).href;
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+    const existing = clients.find((client) => client.url.startsWith(self.location.origin));
+    if (existing) return existing.focus();
+    return self.clients.openWindow(target);
+  }));
+});
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
