@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import NextImage from 'next/image';
+import { hasCachedFullHistory, loadCachedChatHistory, loadCachedOverview, saveCachedChatHistory, saveCachedFullHistory, saveCachedOverview } from '@/lib/whatsapp-browser-cache';
 import {
   Search,
   CheckCheck,
@@ -1251,6 +1252,9 @@ export function WhatsAppChatInterface({
   const liveConnectionStatusRef = useRef<string | null>(null);
   const lastMessageSnapshotAtRef = useRef(0);
   const lastFullMessageSyncAtRef = useRef(0);
+  const loadedChatHistoriesRef = useRef(new Set<string>());
+  const chatHistoryLoadsRef = useRef(new Map<string, Promise<void>>());
+  const fullHistoryWarmupRef = useRef(false);
   const [isClearingDemo, setIsClearingDemo] = useState<boolean>(false);
   const [isSyncingChats, setIsSyncingChats] = useState<boolean>(false);
   // نص حقل الكتابة يُحفظ داخل الحقل نفسه (بدون state) حتى لا تُعاد رسمة الشاشة كاملة مع كل حرف يُكتب
@@ -4525,13 +4529,24 @@ export function WhatsAppChatInterface({
     } catch (e) {}
   };
 
-  const mergeMessages = (incoming: any[]) => {
+  const mergeMessages = (incoming: any[], persistChatCache = true) => {
     setMessages((prev) => {
       if (incoming.length === 0) return prev;
       const byId = new Map<string, any>(prev.map((message) => [message.id, message]));
       for (const message of incoming) byId.set(message.id, message);
       return Array.from(byId.values()).sort((a, b) => (b.timestampMs || 0) - (a.timestampMs || 0));
     });
+    if (persistChatCache && incoming.length > 0 && incoming.length <= 1000) {
+      const byChat = new Map<string, any[]>();
+      for (const message of incoming) {
+        const key = message.chatJid || message.chatName;
+        if (!key) continue;
+        const group = byChat.get(key) || [];
+        group.push(message);
+        byChat.set(key, group);
+      }
+      for (const [key, chatMessages] of byChat) void saveCachedChatHistory(key, chatMessages);
+    }
   };
 
   const fetchMessages = async (skipAirtableSync = false, sinceMs?: number, overview = false) => {
@@ -4543,7 +4558,7 @@ export function WhatsAppChatInterface({
         const data = await res.json();
         if (data.messages) {
           if (data.partial) {
-            mergeMessages(data.messages);
+            mergeMessages(data.messages, !overview);
           } else {
             setMessages(data.messages);
             lastFullMessageSyncAtRef.current = Date.now();
@@ -4568,6 +4583,7 @@ export function WhatsAppChatInterface({
             }
             return hasChanges ? next : prev;
           });
+          if (overview) void saveCachedOverview(data.groups, data.messages || [], data.snapshotAt);
         }
       }
     } catch (e) {
@@ -4612,6 +4628,20 @@ export function WhatsAppChatInterface({
     let isSubscribed = true;
     let lastResumeAt = Date.now();
     let lastAutoReconnectAt = 0;
+
+    // Restore the saved chat list immediately while the live server snapshot loads.
+    void loadCachedOverview().then((cached) => {
+      if (!isSubscribed || !cached) return;
+      if (Array.isArray(cached.groups) && cached.groups.length) {
+        setRealGroups((previous) => previous.length ? previous : cached.groups!);
+      }
+      if (Array.isArray(cached.messages) && cached.messages.length) {
+        setMessages((previous) => previous.length ? previous : cached.messages!);
+      }
+      if (Number.isFinite(cached.snapshotAt)) {
+        lastMessageSnapshotAtRef.current = Math.max(lastMessageSnapshotAtRef.current, cached.snapshotAt || 0);
+      }
+    });
 
     const closeSSE = () => {
       if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -4694,6 +4724,7 @@ export function WhatsAppChatInterface({
               }
               return [newMsg, ...prev];
             });
+            void saveCachedChatHistory(newMsg.chatJid || newMsg.chatName || '', [newMsg]);
 
             // تمرير فوري لأسفل المحادثة إذا كانت الرسالة واردة للمحادثة المفتوحة حالياً
             const currentActive = activeGroupRef.current;
@@ -4902,8 +4933,27 @@ export function WhatsAppChatInterface({
 
     connectSSE();
     void refreshStatusAndMaybeReconnect();
-    // تحميل ملخص المحادثات فقط؛ سجل المحادثة يُجلب عند فتحها والبحث العام عند طلبه.
+    // Show the compact chat list first, then warm the full browser cache in the background.
     void fetchMessages(true, undefined, true);
+
+    const warmFullHistoryCache = async () => {
+      if (fullHistoryWarmupRef.current || fullSearchLoadInFlightRef.current) return;
+      fullHistoryWarmupRef.current = true;
+      try {
+        if (await hasCachedFullHistory()) return;
+        const response = await fetch('/api/whatsapp/messages', { cache: 'no-store' });
+        if (!response.ok) return;
+        const data = await response.json();
+        if (Array.isArray(data?.messages)) {
+          await saveCachedFullHistory(data.messages, Array.isArray(data.groups) ? data.groups : [], data.snapshotAt);
+        }
+      } catch {
+        // The chat list and on-demand history continue to work if the browser cache is full.
+      } finally {
+        fullHistoryWarmupRef.current = false;
+      }
+    };
+    const historyWarmupTimer = window.setTimeout(() => void warmFullHistoryCache(), 2500);
 
     const onResume = () => {
       if (document.hidden || Date.now() - lastResumeAt < 1500) return;
@@ -4947,6 +4997,7 @@ export function WhatsAppChatInterface({
       window.removeEventListener('online', onOnline);
       window.removeEventListener('pageshow', onPageShow);
       clearInterval(fallbackInterval);
+      clearTimeout(historyWarmupTimer);
       closeSSE();
     };
   }, []);
@@ -6246,6 +6297,40 @@ export function WhatsAppChatInterface({
 
   const targetJumpMsgIdRef = useRef<string | null>(null);
 
+  const loadChatHistoryForChat = (groupName: string, targetMsgId?: string) => {
+    const group = realGroups.find((item) => item.name === groupName || item.id === groupName);
+    const cacheKey = group?.id || groupName;
+    const targetAlreadyLoaded = !targetMsgId || messages.some((message) => message.id === targetMsgId);
+    if (loadedChatHistoriesRef.current.has(cacheKey) && targetAlreadyLoaded) return;
+    if (chatHistoryLoadsRef.current.has(cacheKey)) return chatHistoryLoadsRef.current.get(cacheKey);
+
+    const request = (async () => {
+      const cached = await loadCachedChatHistory(cacheKey);
+      const cachedMessages = Array.isArray(cached?.messages) ? cached.messages : [];
+      if (cachedMessages.length) {
+        mergeMessages(cachedMessages, false);
+        const cachedHasTarget = !targetMsgId || cachedMessages.some((message) => message.id === targetMsgId);
+        const cacheIsFresh = Date.now() - (cached?.savedAt || 0) < 60_000;
+        if (cacheIsFresh && cachedHasTarget) {
+          loadedChatHistoriesRef.current.add(cacheKey);
+          return;
+        }
+      }
+
+      try {
+        const response = await fetch(`/api/whatsapp/messages?chatMessages=${encodeURIComponent(groupName)}`, { cache: 'no-store' });
+        const data = response.ok ? await response.json() : null;
+        if (!Array.isArray(data?.messages)) return;
+        mergeMessages(data.messages, false);
+        void saveCachedChatHistory(cacheKey, data.messages);
+        loadedChatHistoriesRef.current.add(cacheKey);
+      } catch {}
+    })().finally(() => chatHistoryLoadsRef.current.delete(cacheKey));
+
+    chatHistoryLoadsRef.current.set(cacheKey, request);
+    return request;
+  };
+
   const handleSelectChat = async (groupName: string, targetMsgId?: string) => {
     if (isMobileViewport()) {
       if (window.history.state?.hawalatGuard) {
@@ -6282,15 +6367,9 @@ export function WhatsAppChatInterface({
     activeGroupRef.current = groupName;
     setActiveGroup(groupName);
 
-    // عند القفز إلى رسالة قديمة، اجلب سجل القروب إن لم تكن الرسالة في الواجهة بعد.
-    if (!lastFullMessageSyncAtRef.current || (targetMsgId && !messages.some((message) => message.id === targetMsgId))) {
-      void fetch(`/api/whatsapp/messages?chatMessages=${encodeURIComponent(groupName)}`)
-        .then((response) => response.ok ? response.json() : null)
-        .then((data) => {
-          if (Array.isArray(data?.messages)) mergeMessages(data.messages);
-        })
-        .catch(() => {});
-    }
+    // Restore this chat from the browser cache first; fetch from the server only when
+    // it is new, stale, or a requested search result is not in the cached history.
+    void loadChatHistoryForChat(groupName, targetMsgId);
 
     // مسح شارة الإشعار الخارجي فوراً عند فتح المحادثة
     setReadChatKeys((prev) => {
