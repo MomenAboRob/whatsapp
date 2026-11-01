@@ -141,7 +141,7 @@ export function WhatsAppQRModal({ isOpen, onClose }: WhatsAppQRModalProps) {
               <div className="p-3.5 bg-[#161717] rounded-xl border border-[#2e2f2f] text-right text-xs text-[#e0e0e0] space-y-1.5 max-w-sm">
                 <span className="font-bold text-[#21c063] block">حول سجل المحادثات:</span>
                 <span className="text-[#a5a5a5] leading-relaxed block text-[11px]">
-                  الرسائل والوسائط القديمة قد لا تكون متاحة للمزامنة. إعادة الربط تنشئ جلسة جديدة وتحافظ على السجل المحلي المحفوظ في التطبيق.
+                  فعّلت مزامنة السجل الكامل عند الربط الجديد. إعادة الربط تتطلب مسح QR، وقد تستغرق المزامنة الأولى وقتاً أطول؛ سجل التطبيق الحالي سيبقى محفوظاً.
                 </span>
               </div>
               <div className="flex flex-col sm:flex-row items-center gap-2 mt-2 w-full justify-center">
