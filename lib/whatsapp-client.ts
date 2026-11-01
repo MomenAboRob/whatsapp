@@ -5356,12 +5356,14 @@ export class WhatsAppManager {
       }
     } catch (e) {}
 
-    // حذف مفاتيح الربط فقط؛ إبقاء سجل الرسائل وجهات الاتصال والقوائم المحلية.
+    // Remove Baileys credentials only. Workspace, number allocations, push
+    // subscriptions and local chat data share this folder and must survive logout.
     try {
       if (fs.existsSync(this.authDir)) {
         const files = fs.readdirSync(this.authDir);
+        const whatsappCredentialFile = /^(?:creds|app-state-sync-key-.+|app-state-sync-version-.+|pre-key-.+|session-.+|sender-key-.+|sender-key-memory-.+|identity-key-.+|lid-mapping-.+|device-list-.+|tctoken-.+)\.json$/;
         for (const file of files) {
-          if (file.startsWith('stored_') || file === 'custom_lists.json') continue;
+          if (!whatsappCredentialFile.test(file)) continue;
           try {
             fs.unlinkSync(path.join(this.authDir, file));
           } catch (e) {}
