@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
+import { dataPath } from '@/lib/data-storage';
 
 export type NumberFile = { id: string; name: string; createdAt: string; numbers: string[] };
 export type NumberAllocation = { id: string; fileId: string; fileName?: string; batchId?: string; branchName?: string; personJid: string; personName: string; numbers: string[]; createdAt: string };
@@ -11,7 +12,7 @@ export type NumberCenterData = { files: NumberFile[]; allocations: NumberAllocat
 
 export const allocationMessageText = (allocation: NumberAllocation) => allocation.numbers.join('\n');
 
-const filePath = (userId: string) => path.join(process.cwd(), 'whatsapp_auth', `user_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`, 'number-center.json');
+const filePath = (userId: string) => dataPath('whatsapp_auth', `user_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`, 'number-center.json');
 
 export function readNumberCenter(userId: string): NumberCenterData {
   try {

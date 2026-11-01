@@ -203,16 +203,13 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      // Persist a small durable outbox entry, then let the server send it independently
-      // of the browser request so leaving the chat cannot discard the message.
-      const queuedMessage = await wa.enqueueOutgoingMessage(outboundMessage);
-      const latestMessage = wa.getOutgoingQueueMessage(outboundMessage.id) || queuedMessage;
-      const stillPending = latestMessage.id === outboundMessage.id;
+      // إرسال فوري مباشر عبر اتصال واتساب المتصل، مع الحفظ الآمن في الطابور عند انقطاع الشبكة
+      const result = await wa.sendImmediateOrEnqueue(outboundMessage);
       return NextResponse.json({
-        success: true,
-        queued: stillPending,
-        sentMessage: wa.toClientMessage(latestMessage),
-        message: stillPending ? 'تم حفظ الرسالة وبدأ إرسالها مباشرة.' : 'تم إرسال الرسالة مسبقاً.',
+        success: result.success,
+        queued: result.queued,
+        sentMessage: wa.toClientMessage(result.sentMessage),
+        message: result.message,
       });
     }
 

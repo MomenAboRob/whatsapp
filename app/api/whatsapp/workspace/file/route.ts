@@ -4,6 +4,7 @@ import path from 'path';
 import { createHash } from 'crypto';
 import { getAuthUserFromRequest } from '@/lib/auth';
 import { readWorkspace, saveWorkspace } from '@/lib/whatsapp-workspace';
+import { dataPath } from '@/lib/data-storage';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,7 +12,7 @@ export const dynamic = 'force-dynamic';
 const filePath = (userId: string, mentionId: string) => {
   const cleanUser = userId.replace(/[^a-zA-Z0-9_-]/g, '_');
   const hash = createHash('sha256').update(mentionId).digest('hex');
-  return path.join(process.cwd(), 'whatsapp_auth', `user_${cleanUser}`, 'task_files', hash);
+  return dataPath('whatsapp_auth', `user_${cleanUser}`, 'task_files', hash);
 };
 const bad = (error: string, status = 400) => NextResponse.json({ success: false, error }, { status });
 

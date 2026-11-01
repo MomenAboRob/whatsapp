@@ -5,6 +5,7 @@ import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
 import { createPortableBackupAt, restorePortableBackup } from '@/lib/portable-backup';
+import { dataPath } from '@/lib/data-storage';
 
 type DesktopConfig = { folder: string; intervalHours: 24 | 168; lastBackupAt?: string };
 type BackupFile = { name: string; size: number; createdAt: string };
@@ -14,7 +15,7 @@ const globalScheduler = globalThis as typeof globalThis & { hawalatDesktopBackup
 
 function safeUserId(userId: string) { return userId.replace(/[^a-zA-Z0-9_-]/g, '_'); }
 function configFile(userId: string) {
-  return path.join(process.cwd(), 'whatsapp_auth', `user_${safeUserId(userId)}`, 'desktop_drive_backup.json');
+  return dataPath('whatsapp_auth', `user_${safeUserId(userId)}`, 'desktop_drive_backup.json');
 }
 
 function readConfig(userId: string): DesktopConfig | null {
@@ -130,7 +131,7 @@ export async function restoreFromDesktopDrive(userId: string, name: string) {
 export function startDesktopBackupScheduler() {
   if (globalScheduler.hawalatDesktopBackupScheduler) return;
   const check = async () => {
-    const root = path.join(process.cwd(), 'whatsapp_auth');
+  const root = dataPath('whatsapp_auth');
     if (!fs.existsSync(root)) return;
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
       if (!entry.isDirectory() || !entry.name.startsWith('user_')) continue;

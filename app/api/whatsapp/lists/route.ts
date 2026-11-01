@@ -2,9 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUserFromRequest } from '@/lib/auth';
+import { dataPath } from '@/lib/data-storage';
 
 function fileFor(userId: string) {
-  return path.join(process.cwd(), 'whatsapp_auth', `user_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`, 'custom_lists.json');
+  return dataPath('whatsapp_auth', `user_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`, 'custom_lists.json');
 }
 
 export async function GET(request: NextRequest) {

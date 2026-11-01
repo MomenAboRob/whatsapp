@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { getWhatsAppManager } from '@/lib/whatsapp-client';
+import { dataPath } from '@/lib/data-storage';
 
 function getCrmFile(waDir: string): Record<string, any> {
   try {
@@ -10,7 +11,7 @@ function getCrmFile(waDir: string): Record<string, any> {
       const raw = fs.readFileSync(userPath, 'utf-8');
       return JSON.parse(raw);
     }
-    const rootPath = path.join(process.cwd(), 'whatsapp_auth', 'chat_crm.json');
+    const rootPath = dataPath('whatsapp_auth', 'chat_crm.json');
     if (fs.existsSync(rootPath)) {
       const raw = fs.readFileSync(rootPath, 'utf-8');
       return JSON.parse(raw);
@@ -35,7 +36,7 @@ function saveCrmFile(waDir: string, data: Record<string, any>): void {
 
 export async function GET(req: NextRequest) {
   const wa = getWhatsAppManager(req);
-  const waDir = wa.authDir || path.join(process.cwd(), 'whatsapp_auth');
+  const waDir = wa.authDir || dataPath('whatsapp_auth');
   const data = getCrmFile(waDir);
   return NextResponse.json({ success: true, data });
 }
@@ -43,7 +44,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const wa = getWhatsAppManager(req);
-    const waDir = wa.authDir || path.join(process.cwd(), 'whatsapp_auth');
+  const waDir = wa.authDir || dataPath('whatsapp_auth');
     const body = await req.json();
     const { chatKey, updates, action } = body;
 

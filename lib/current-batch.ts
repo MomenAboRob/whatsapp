@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { dataPath } from '@/lib/data-storage';
 
-const settingsPath = path.join(process.cwd(), 'app_data', 'batch-settings.json');
+const settingsPath = dataPath('app_data', 'batch-settings.json');
 
 export function getCurrentBatchNumber(): string {
   try {

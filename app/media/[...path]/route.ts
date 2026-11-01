@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import { dataPath } from '@/lib/data-storage';
 import { getWhatsAppManager } from '@/lib/whatsapp-client';
 import { getAuthUserFromRequest } from '@/lib/auth';
 
@@ -59,8 +60,8 @@ export async function GET(
     );
     if (!ownsMedia) return NextResponse.json({ error: 'الملف غير موجود' }, { status: 404 });
 
-    const storageMediaDir = path.join(process.cwd(), 'whatsapp_media');
-    const publicMediaDir = path.join(process.cwd(), 'public', 'media');
+    const storageMediaDir = dataPath('whatsapp_media');
+    const publicMediaDir = dataPath('public', 'media');
     const rootMediaDir = path.join(process.cwd(), 'media');
 
     const targetFile = path.join(storageMediaDir, ...cleanSegments);

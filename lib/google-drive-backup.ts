@@ -7,6 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { createGzip, createGunzip } from 'node:zlib';
 import readline from 'node:readline';
 import { getWhatsAppManager, type WhatsAppGroupItem } from '@/lib/whatsapp-client';
+import { dataPath } from '@/lib/data-storage';
 
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const DRIVE_API = 'https://www.googleapis.com/drive/v3/files';
@@ -34,7 +35,7 @@ function encryptionKey() {
 
 function connectionPath(userId: string) {
   const safeId = userId.replace(/[^a-zA-Z0-9_-]/g, '_');
-  return path.join(process.cwd(), 'whatsapp_auth', `user_${safeId}`, 'google_drive_connection.json');
+  return dataPath('whatsapp_auth', `user_${safeId}`, 'google_drive_connection.json');
 }
 
 function readConnection(userId: string): SavedConnection | null {
@@ -167,7 +168,7 @@ async function buildArchive(userId: string, outputFile: string) {
   const wa = getWhatsAppManager(userId);
   const messages = wa.getMessages();
   const groups = wa.getUserGroups();
-  const mediaDir = path.join(process.cwd(), 'whatsapp_media');
+  const mediaDir = dataPath('whatsapp_media');
   const names = referencedMedia(messages);
   const present = names.filter((name) => fs.existsSync(path.join(mediaDir, name)));
   const missingMedia = names.length - present.length;
@@ -284,7 +285,7 @@ export async function restoreFromDrive(userId: string, fileId: string) {
       } else throw new Error('صيغة النسخة غير معروفة.');
     }
     if (!header || !messages || !groups || messages.length !== header.messageCount || groups.length !== header.chatCount || mediaCount !== header.mediaCount) throw new Error('النسخة غير مكتملة.');
-    const mediaDir = path.join(process.cwd(), 'whatsapp_media');
+    const mediaDir = dataPath('whatsapp_media');
     await fs.promises.mkdir(mediaDir, { recursive: true });
     for (const name of await fs.promises.readdir(stagedMediaDir)) {
       const target = path.join(mediaDir, name);

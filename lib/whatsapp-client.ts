@@ -283,6 +283,9 @@ export class WhatsAppManager {
   private lidToPhoneMap: Record<string, string> = {};
   private phoneToLidMap: Record<string, string> = {};
   private avatarsMap: Record<string, string> = {};
+  private messageIndex = new Map<string, ChatMessage>();
+  private lidMappingsLoaded = false;
+  private presenceKeepAliveTimer: NodeJS.Timeout | null = null;
   private pendingReactionsMap: Map<string, any[]> = new Map();
   private revokedMessageIds: Set<string> = new Set();
   private isConnecting: boolean = false;
@@ -304,6 +307,30 @@ export class WhatsAppManager {
   private avatarSyncStateFilePath: string;
   private lastAvatarSyncAt = 0;
   private reconnectAttempts = 0;
+
+  public indexMessage(message: ChatMessage): void {
+    if (!message || !message.id) return;
+    this.messageIndex.set(message.id, message);
+    if (message.clientRequestId) this.messageIndex.set(message.clientRequestId, message);
+    const rawKeyId = message.rawBaileysMessage?.key?.id;
+    if (rawKeyId) this.messageIndex.set(rawKeyId, message);
+  }
+
+  public rebuildMessageIndex(): void {
+    this.messageIndex.clear();
+    for (const msg of this.incomingMessages) {
+      this.indexMessage(msg);
+    }
+  }
+
+  public findMessageById(id: string): ChatMessage | undefined {
+    if (!id) return undefined;
+    const indexed = this.messageIndex.get(id);
+    if (indexed) return indexed;
+    return this.incomingMessages.find(
+      (m) => m.id === id || m.clientRequestId === id || m.rawBaileysMessage?.key?.id === id
+    );
+  }
 
   private emitOutgoingMessage(message: ChatMessage): void {
     this.events.emit('message', message);
@@ -625,7 +652,8 @@ export class WhatsAppManager {
     return this.revokedMessageIds;
   }
 
-  public loadLidMappings(): void {
+  public loadLidMappings(force: boolean = false): void {
+    if (this.lidMappingsLoaded && !force) return;
     try {
       if (!fs.existsSync(this.authDir)) return;
       const savedMapPath = path.join(this.authDir, 'stored_lid_phone_map.json');
@@ -665,6 +693,7 @@ export class WhatsAppManager {
           } catch (e) {}
         }
       }
+      this.lidMappingsLoaded = true;
     } catch (e) {
       console.error('خطأ في تحميل تعيينات LID:', e);
     }
@@ -2018,6 +2047,7 @@ export class WhatsAppManager {
       }
       this.loadOutgoingQueue();
       this.syncStoredContacts();
+      this.rebuildMessageIndex();
       // The saved snapshot is already on disk. Avoid serializing the full history again
       // during startup unless a later update actually changes it.
     } catch (e) {
@@ -2123,6 +2153,7 @@ export class WhatsAppManager {
     const existingIndex = this.incomingMessages.findIndex((item) => item.id === requestId);
     if (existingIndex >= 0) this.incomingMessages[existingIndex] = queuedMessage;
     else this.incomingMessages.unshift(queuedMessage);
+    this.indexMessage(queuedMessage);
 
     this.outgoingQueue.set(requestId, {
       requestId,
@@ -2142,6 +2173,98 @@ export class WhatsAppManager {
 
   public getOutgoingQueueMessage(requestId: string): ChatMessage | undefined {
     return this.outgoingQueue.get(requestId)?.message;
+  }
+
+  /**
+   * إرسال فوري فائق السرعة عبر الاتصال المباشر (Baileys)، مع التراجع التلقائي إلى طابور الانتظار
+   * لضمان سرعة التسليم اللحظية دون فقدان أي رسالة في حال انقطاع الشبكة
+   */
+  public async sendImmediateOrEnqueue(message: ChatMessage): Promise<{
+    success: boolean;
+    queued: boolean;
+    sentMessage: ChatMessage;
+    message: string;
+  }> {
+    const enqueueStartedAt = Date.now();
+    const requestId = message.id || `msg_real_${Date.now()}`;
+    const targetChat = message.chatJid || message.chatName;
+
+    const queuedMessage: ChatMessage = {
+      ...message,
+      id: requestId,
+      timestampMs: message.timestampMs || Date.now(),
+      isFromMe: true,
+      sender: 'أنا',
+      senderName: 'أنا',
+      deliveryStatus: 'pending',
+    };
+
+    const existingIndex = this.incomingMessages.findIndex((item) => item.id === requestId);
+    if (existingIndex >= 0) this.incomingMessages[existingIndex] = queuedMessage;
+    else this.incomingMessages.unshift(queuedMessage);
+    this.indexMessage(queuedMessage);
+
+    this.outgoingQueue.set(requestId, {
+      requestId,
+      status: 'pending',
+      message: queuedMessage,
+      updatedAt: Date.now(),
+    });
+    void this.persistOutgoingQueue();
+
+    // إذا كانت الجلسة متصلة وWebSocket جاهز، أرسل الرسالة مباشرة دون أي تأخير
+    if (this.sock && this.connectionStatus === 'CONNECTED' && this.sock.ws?.isOpen !== false && targetChat) {
+      try {
+        const sendPromise = this.forwardMessage(
+          targetChat,
+          queuedMessage.text || '',
+          queuedMessage.mediaUrl,
+          queuedMessage.quotedMessage?.id,
+          queuedMessage.quotedMessage,
+          requestId,
+          Array.isArray((queuedMessage as any).mentions)
+            ? (queuedMessage as any).mentions.filter((j: unknown) => typeof j === 'string')
+            : undefined
+        );
+
+        const res = await withTimeout(sendPromise, 7000, 'مهلة الإرسال المباشر انتهت');
+        if (res.success && res.messageId) {
+          const sentMessage = this.findMessageById(res.messageId) || this.incomingMessages.find((m) => m.id === res.messageId);
+          if (sentMessage) {
+            const queueEntry = this.outgoingQueue.get(requestId);
+            if (queueEntry) {
+              this.outgoingQueue.set(requestId, {
+                ...queueEntry,
+                status: 'sent',
+                message: sentMessage,
+                updatedAt: Date.now(),
+              });
+              void this.persistOutgoingQueue();
+            }
+            console.log(`[WhatsApp] تم إرسال الرسالة فورياً بنجاح خلال ${Date.now() - enqueueStartedAt}ms (المعرف: ${res.messageId})`);
+            return {
+              success: true,
+              queued: false,
+              sentMessage,
+              message: 'تم إرسال الرسالة بنجاح عبر واتساب.',
+            };
+          }
+        }
+      } catch (sendErr) {
+        console.warn('[WhatsApp] تعذر الإرسال المباشر الفوري، تم إبقاء الرسالة في طابور الإرسال:', sendErr);
+        this.schedulePendingQueueFlush();
+      }
+    } else {
+      if (this.connectionStatus === 'CONNECTED') this.schedulePendingQueueFlush();
+    }
+
+    this.emitOutgoingMessage(queuedMessage);
+    return {
+      success: true,
+      queued: true,
+      sentMessage: queuedMessage,
+      message: 'تم حفظ الرسالة وبدأ إرسالها مباشرة.',
+    };
   }
 
   public persistContacts() {
@@ -2390,12 +2513,12 @@ export class WhatsAppManager {
         emitOwnEvents: true,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
-        keepAliveIntervalMs: 30000,
-        markOnlineOnConnect: false,
+        keepAliveIntervalMs: 15000,
+        markOnlineOnConnect: true,
         generateHighQualityLinkPreview: false,
         shouldSyncHistoryMessage: () => true,
         getMessage: async (key) => {
-          const found = this.incomingMessages.find((m) => m.id === key.id || m.rawBaileysMessage?.key?.id === key.id);
+          const found = this.findMessageById(key.id || '');
           if (found?.rawBaileysMessage?.message) {
             return found.rawBaileysMessage.message;
           }
@@ -2444,6 +2567,10 @@ export class WhatsAppManager {
           this.qrCodeDataUrl = null;
           this.presences.clear();
           this.presenceSubscriptions.clear();
+          if (this.presenceKeepAliveTimer) {
+            clearInterval(this.presenceKeepAliveTimer);
+            this.presenceKeepAliveTimer = null;
+          }
           const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
           const isReplaced = statusCode === DisconnectReason.connectionReplaced || statusCode === 440;
           const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401;
@@ -2491,11 +2618,21 @@ export class WhatsAppManager {
             this.connectedUser = null;
           }
 
+          // إعلام خوادم واتساب أن الجهاز متصل ونشط فوراً لدفع الرسائل الواردة بلا أدنى تأخير
+          this.sock?.sendPresenceUpdate('available').catch(() => {});
+          if (this.presenceKeepAliveTimer) clearInterval(this.presenceKeepAliveTimer);
+          this.presenceKeepAliveTimer = setInterval(() => {
+            if (this.sock && this.connectionStatus === 'CONNECTED') {
+              this.sock.sendPresenceUpdate('available').catch(() => {});
+            }
+          }, 45000);
+
           this.events.emit('status', this.getStatus());
 
+          // تفريغ الرسائل المعلقة في الطابور فوراً
+          this.flushPendingMessages().catch(() => {});
           this.syncGroups(true).catch(() => {});
           setTimeout(() => {
-            this.flushPendingMessages().catch(() => {});
             this.syncMissingMedia().catch(() => {});
           }, 1500);
         }
@@ -3110,7 +3247,7 @@ export class WhatsAppManager {
     if (!isConversationJid(msg.key?.remoteJid)) return;
     const id = msg.key?.id || String(Date.now() + Math.random());
     const existing = messageLookup?.get(id) || this.activeHistoryMessageLookup?.get(id) ||
-      (!messageLookup ? this.incomingMessages.find((m) => m.id === id || m.rawBaileysMessage?.key?.id === id) : undefined);
+      (!messageLookup ? this.findMessageById(id) : undefined);
     if (existing) {
       let changed = false;
 
@@ -3338,19 +3475,21 @@ export class WhatsAppManager {
     };
     if (messageLookup && this.activeHistoryMessages) this.activeHistoryMessages.push(storedMessage);
     else this.incomingMessages.unshift(storedMessage);
+    this.indexMessage(storedMessage);
     messageLookup?.set(id, storedMessage);
     if (msg.key?.id) messageLookup?.set(msg.key.id, storedMessage);
     this.activeHistoryMessageLookup?.set(id, storedMessage);
     if (msg.key?.id) this.activeHistoryMessageLookup?.set(msg.key.id, storedMessage);
 
+    // إرسال الرسالة فوراً عبر SSE للمتصفح دون انتظار الحفظ في القرص أو تسجيل المنشن
+    if (live) this.events.emit('message', storedMessage);
+
     this.applyPendingReactions(id);
     this.persistData();
     if (live && !fromMe) {
-      const savedMessage = this.incomingMessages[0];
-      void recordLiveMention(this, savedMessage)
+      void recordLiveMention(this, storedMessage)
         .catch((error) => console.warn('تعذر تسجيل المنشن الجديد:', error));
     }
-    if (live) this.events.emit('message', this.incomingMessages[0]);
 
     // الوسائط القديمة تُجلب عند فتح المحادثة؛ تنزيل تاريخ كامل هنا يزاحم الصور الظاهرة.
     if (live && hasMedia && this.sock && timestampMs >= Date.now() - 2 * 60 * 60 * 1000) {
@@ -3897,22 +4036,20 @@ export class WhatsAppManager {
     this.isFlushingQueue = true;
 
     try {
-      const pending = this.incomingMessages.filter(
-        (m) =>
-          (m.isFromMe || m.sender === 'أنا' || m.senderName === 'أنا') &&
-          typeof m.id === 'string' &&
-          (m.id.startsWith('msg_real_') || m.id.startsWith('temp_'))
-      ).sort((a, b) => (a.timestampMs || 0) - (b.timestampMs || 0));
+      const pendingEntries = Array.from(this.outgoingQueue.values())
+        .filter((entry) => entry.status === 'pending')
+        .sort((a, b) => (a.message.timestampMs || 0) - (b.message.timestampMs || 0));
 
-      if (pending.length === 0) return;
-      console.log(`[WhatsApp] جاري إرسال وتفريغ (${pending.length}) رسائل معلقة في طابور الانتظار...`);
+      if (pendingEntries.length === 0) return;
+      console.log(`[WhatsApp] جاري إرسال وتفريغ (${pendingEntries.length}) رسائل معلقة في طابور الانتظار...`);
 
-      for (const msg of pending) {
+      for (const entry of pendingEntries) {
+        const msg = entry.message;
         try {
           const targetChat = msg.chatJid || msg.chatName;
           if (!targetChat) continue;
 
-          const queuedAt = this.outgoingQueue.get(msg.id)?.updatedAt || msg.timestampMs || Date.now();
+          const queuedAt = entry.updatedAt || msg.timestampMs || Date.now();
           const sendStartedAt = Date.now();
           console.log(`[WhatsApp] بدء معالجة رسالة صادرة من الطابور بعد ${Math.max(0, sendStartedAt - queuedAt)}ms.`);
           const res = await this.forwardMessage(
@@ -3929,7 +4066,7 @@ export class WhatsAppManager {
           console.log(`[WhatsApp] انتهت محاولة الإرسال خلال ${Date.now() - sendStartedAt}ms.`);
           if (res.success) {
             const queueEntry = this.outgoingQueue.get(msg.id);
-            const sentMessage = this.incomingMessages.find((item) => item.id === res.messageId);
+            const sentMessage = this.findMessageById(res.messageId || '') || this.incomingMessages.find((item) => item.id === res.messageId);
             if (queueEntry && sentMessage) {
               this.outgoingQueue.set(msg.id, {
                 ...queueEntry,
@@ -3937,7 +4074,7 @@ export class WhatsAppManager {
                 message: sentMessage,
                 updatedAt: Date.now(),
               });
-              await this.persistOutgoingQueue();
+              void this.persistOutgoingQueue();
             }
             console.log(`[WhatsApp] تم إرسال الرسالة المعلقة بنجاح: ${msg.id} -> ${res.messageId}`);
           }
@@ -4339,6 +4476,7 @@ export class WhatsAppManager {
             sender: 'أنا',
             senderName: 'أنا',
           };
+          this.indexMessage(this.incomingMessages[existingIdx]);
           this.persistData();
           this.emitOutgoingMessage(this.incomingMessages[existingIdx]);
           return {
@@ -4406,8 +4544,10 @@ export class WhatsAppManager {
       } else {
         this.incomingMessages.unshift(newSentMessage);
       }
+      const finalMsg = this.findMessageById(msgId) || newSentMessage;
+      this.indexMessage(finalMsg);
       this.persistData();
-      this.emitOutgoingMessage(this.incomingMessages.find((m) => m.id === msgId) || newSentMessage);
+      this.emitOutgoingMessage(finalMsg);
 
       return {
         success: true,

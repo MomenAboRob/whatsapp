@@ -46,10 +46,15 @@ export function WhatsAppWorkspace({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
   const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<string[]>(initialTarget ? [initialTarget] : []);
+  const [selectedManual, setSelectedManual] = useState<string[]>(initialTarget ? [initialTarget] : []);
+  const [selectedListIds, setSelectedListIds] = useState<string[]>([]);
+  const [deselectedTargets, setDeselectedTargets] = useState<string[]>([]);
   const [text, setText] = useState(initialText);
   const [scheduledAt, setScheduledAt] = useState('');
   const [listName, setListName] = useState('');
+  const [editingListId, setEditingListId] = useState('');
+  const [listDraftName, setListDraftName] = useState('');
+  const [listDraftTargets, setListDraftTargets] = useState<string[]>([]);
   const [confirmSend, setConfirmSend] = useState(false);
   const [sendResult, setSendResult] = useState('');
   const [taskDraft, setTaskDraft] = useState<TaskDraft | null>(initialTask ? { ...initialTask, source: 'message' } : null);
@@ -128,15 +133,52 @@ export function WhatsAppWorkspace({
   const directChats = useMemo(() => (data?.directChats || []).filter((chat) =>
     (chat.name + ' ' + (chat.phone || '')).toLowerCase().includes(search.toLowerCase().trim())
   ), [data, search]);
+  const selected = useMemo(() => [...new Set([
+    ...selectedManual,
+    ...(data?.recipientLists || [])
+      .filter((list) => selectedListIds.includes(list.id))
+      .flatMap((list) => list.targetJids),
+  ])].filter((jid) => !deselectedTargets.includes(jid)), [data?.recipientLists, deselectedTargets, selectedListIds, selectedManual]);
+  const contactSelection = editingListId ? listDraftTargets : selected;
   const selectedNames = selected.map((id) => data?.directChats.find((chat) => chat.id === id)?.name || id);
   const toggle = (jid: string) => {
+    if (editingListId) {
+      setListDraftTargets((previous) => previous.includes(jid) ? previous.filter((item) => item !== jid) : [...previous, jid]);
+      return;
+    }
     sendRequestId.current = '';
-    setSelected((previous) => previous.includes(jid) ? previous.filter((item) => item !== jid) : [...previous, jid]);
+    if (selected.includes(jid)) {
+      setSelectedManual((previous) => previous.filter((item) => item !== jid));
+      setDeselectedTargets((previous) => previous.includes(jid) ? previous : [...previous, jid]);
+    } else {
+      setSelectedManual((previous) => previous.includes(jid) ? previous : [...previous, jid]);
+      setDeselectedTargets((previous) => previous.filter((item) => item !== jid));
+    }
+  };
+  const toggleList = (id: string) => {
+    sendRequestId.current = '';
+    setSelectedListIds((previous) => previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id]);
+  };
+  const editList = (list: RecipientList) => {
+    setEditingListId(list.id);
+    setListDraftName(list.name);
+    setListDraftTargets([...list.targetJids]);
+  };
+  const cancelListEdit = () => {
+    setEditingListId('');
+    setListDraftName('');
+    setListDraftTargets([]);
   };
 
   const saveList = async () => {
-    if (!listName.trim() || !selected.length) { setError('اكتب اسم القائمة وحدد جهات الاتصال'); return; }
-    await act('list', { action: 'save_list', name: listName, targetJids: selected }, () => setListName(''));
+    const name = editingListId ? listDraftName : listName;
+    const targets = editingListId ? listDraftTargets : selected;
+    if (!name.trim() || (!editingListId && !targets.length)) { setError('اكتب اسم القائمة وحدد جهات الاتصال'); return; }
+    if (editingListId) sendRequestId.current = '';
+    await act('list', { action: 'save_list', id: editingListId || undefined, name, targetJids: targets }, () => {
+      if (editingListId) cancelListEdit();
+      else setListName('');
+    });
   };
   const schedule = async () => {
     if (scheduling.current) return;
@@ -146,7 +188,7 @@ export function WhatsAppWorkspace({
     scheduling.current = true;
     await act('schedule', {
       action: 'schedule', text, targetJids: selected, scheduledAt: when.toISOString(),
-    }, () => { setText(''); setSelected([]); setScheduledAt(''); setSendResult('تم حفظ الرسالة المجدولة.'); });
+    }, () => { setText(''); setSelectedManual([]); setSelectedListIds([]); setDeselectedTargets([]); setScheduledAt(''); setSendResult('تم حفظ الرسالة المجدولة.'); });
     scheduling.current = false;
   };
   const sendNow = async () => {
@@ -159,7 +201,7 @@ export function WhatsAppWorkspace({
       const sent = Object.values(result.results as Record<string, { success: boolean }>).filter((item) => item.success).length;
       setSendResult(`تم الإرسال إلى ${sent} من ${selected.length} جهات.${sent < selected.length ? ' تعذر الإرسال إلى الجهات الأخرى؛ راجع النتيجة قبل إعادة المحاولة.' : ''}`);
       setConfirmSend(false);
-      setText(''); setSelected([]); sendRequestId.current = '';
+      setText(''); setSelectedManual([]); setSelectedListIds([]); setDeselectedTargets([]); sendRequestId.current = '';
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر الإرسال');
     } finally { sending.current = false; setBusy(''); }
@@ -265,13 +307,14 @@ export function WhatsAppWorkspace({
         ) : (
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
             <section className="rounded-2xl border border-[#2a3933] bg-[#18201d] p-4">
-              <SectionTitle title="جهات الاتصال" subtitle={`تم اختيار ${selected.length} جهة`} />
+              <SectionTitle title="جهات الاتصال" subtitle={editingListId ? `تعديل القائمة · تم اختيار ${listDraftTargets.length} جهة` : `تم اختيار ${selected.length} جهة للإرسال`} />
+              {editingListId && <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#21c063]/30 bg-[#21c063]/10 p-3 text-sm"><div className="min-w-0 flex-1"><span className="mb-1 block text-xs text-[#a9bbb2]">عدّل الاسم أو أعضاء القائمة</span><input value={listDraftName} onChange={(event) => setListDraftName(event.target.value)} aria-label="اسم القائمة" maxLength={80} className="w-full rounded-lg border border-[#34453c] bg-[#111716] px-2 py-1.5 text-sm outline-none focus:border-[#21c063]" /></div><div className="flex gap-2"><SmallButton active onClick={() => void saveList()} disabled={busy === 'list'}><Check className="h-4 w-4" />حفظ التعديلات</SmallButton><SmallButton onClick={cancelListEdit}>إلغاء</SmallButton></div></div>}
               <div className="mb-3 flex items-center gap-2 rounded-xl bg-[#101815] px-3 py-2"><Search className="h-4 w-4 text-[#8da198]" /><input value={search} onChange={(event) => { setSearch(event.target.value); setVisibleContacts(100); }} placeholder="ابحث بالاسم أو الرقم" className="w-full bg-transparent text-sm outline-none placeholder:text-[#82968b]" /></div>
               <div className="max-h-[410px] space-y-1 overflow-y-auto">
                 {directChats.slice(0, visibleContacts).map((chat) => <button key={chat.id} type="button" onClick={() => toggle(chat.id)} className="flex w-full items-center gap-3 rounded-xl p-2 text-right hover:bg-[#25352d]">
                   {chat.avatarUrl ? <Image src={chat.avatarUrl} alt="" width={36} height={36} unoptimized className="h-9 w-9 rounded-full object-cover" /> : <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#2b4034] text-emerald-300"><Users className="h-4 w-4" /></div>}
                   <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold">{chat.name}</span><span dir="ltr" className="block text-right text-xs text-[#8da198]">{chat.phone || ''}</span></span>
-                  <span className={`flex h-5 w-5 items-center justify-center rounded-full border ${selected.includes(chat.id) ? 'border-[#21c063] bg-[#21c063] text-[#08160e]' : 'border-[#6e8176]'}`}>{selected.includes(chat.id) && <Check className="h-3 w-3" />}</span>
+                  <span className={`flex h-5 w-5 items-center justify-center rounded-full border ${contactSelection.includes(chat.id) ? 'border-[#21c063] bg-[#21c063] text-[#08160e]' : 'border-[#6e8176]'}`}>{contactSelection.includes(chat.id) && <Check className="h-3 w-3" />}</span>
                 </button>)}
                 {directChats.length > visibleContacts && <button type="button" onClick={() => setVisibleContacts((count) => count + 100)} className="w-full rounded-lg border border-[#34453c] p-2 text-xs font-semibold text-[#21c063]">عرض 100 جهة أخرى ({directChats.length - visibleContacts} متبقية)</button>}
                 {!directChats.length && <Empty text="لا توجد جهة مطابقة." />}
@@ -279,12 +322,22 @@ export function WhatsAppWorkspace({
             </section>
             <div className="space-y-5">
               <section className="rounded-2xl border border-[#2a3933] bg-[#18201d] p-4">
-                <SectionTitle title="قوائم المستلمين" subtitle="اختر القائمة لإضافة جميع جهاتها دفعة واحدة." />
+                <SectionTitle title="قوائم المستلمين" subtitle="اضغط على القائمة لتحديد جهاتها للإرسال أو إلغاء تحديدها. استخدم القلم لتعديل الأعضاء." />
                 <div className="space-y-2">
-                  {(data?.recipientLists || []).map((list) => <div key={list.id} className="flex items-center gap-2 rounded-lg bg-[#111716] p-2 text-sm"><button type="button" onClick={() => { sendRequestId.current = ''; setSelected((prev) => [...new Set([...prev, ...list.targetJids])]); }} className="min-w-0 flex-1 text-right hover:text-[#21c063]"><span className="block truncate font-medium">{list.name}</span><span className="text-xs text-[#8da198]">{list.targetJids.length} جهات · تحديد الكل</span></button><button type="button" onClick={() => void act(list.id, { action: 'delete_list', id: list.id })} title="حذف القائمة" className="p-1 text-[#8da198] hover:text-rose-400"><Trash2 className="h-4 w-4" /></button></div>)}
+                  {(data?.recipientLists || []).map((list) => {
+                    const isSelected = selectedListIds.includes(list.id);
+                    return <div key={list.id} className={`flex items-center gap-2 rounded-lg border p-2 text-sm ${isSelected ? 'border-[#21c063]/50 bg-[#123a28]' : 'border-transparent bg-[#111716]'}`}>
+                      <button type="button" aria-pressed={isSelected} onClick={() => toggleList(list.id)} className="flex min-w-0 flex-1 items-center gap-2 text-right hover:text-[#21c063]">
+                        <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${isSelected ? 'border-[#21c063] bg-[#21c063] text-[#08160e]' : 'border-[#6e8176]'}`}>{isSelected && <Check className="h-3 w-3" />}</span>
+                        <span className="min-w-0"><span className="block truncate font-medium">{list.name}</span><span className="text-xs text-[#8da198]">{list.targetJids.length} جهات · {isSelected ? 'محددة للإرسال' : 'اضغط لتحديد الكل'}</span></span>
+                      </button>
+                      <button type="button" onClick={() => editList(list)} title="تعديل أعضاء القائمة" aria-label={`تعديل ${list.name}`} className="p-1 text-[#8da198] hover:text-[#21c063]"><Pencil className="h-4 w-4" /></button>
+                      <button type="button" onClick={() => void act(list.id, { action: 'delete_list', id: list.id }, () => { if (editingListId === list.id) cancelListEdit(); })} title="حذف القائمة" aria-label={`حذف ${list.name}`} className="p-1 text-[#8da198] hover:text-rose-400"><Trash2 className="h-4 w-4" /></button>
+                    </div>;
+                  })}
                   {!data?.recipientLists.length && <p className="text-xs text-[#8da198]">لا توجد قوائم محفوظة بعد.</p>}
                 </div>
-                <div className="mt-3 flex gap-2"><input value={listName} onChange={(event) => setListName(event.target.value)} placeholder="اسم قائمة جديدة" className="min-w-0 flex-1 rounded-lg border border-[#34453c] bg-[#111716] px-2 py-1.5 text-sm outline-none" /><SmallButton onClick={() => void saveList()} disabled={busy === 'list'}><ListPlus className="h-4 w-4" />حفظ المحددين</SmallButton></div>
+                {!editingListId && <div className="mt-3 flex gap-2"><input value={listName} onChange={(event) => setListName(event.target.value)} placeholder="اسم قائمة جديدة" className="min-w-0 flex-1 rounded-lg border border-[#34453c] bg-[#111716] px-2 py-1.5 text-sm outline-none" /><SmallButton onClick={() => void saveList()} disabled={busy === 'list' || !selected.length}><ListPlus className="h-4 w-4" />حفظ المحددين</SmallButton></div>}
               </section>
               <section className="rounded-2xl border border-[#2a3933] bg-[#18201d] p-4">
                 <SectionTitle title="نص الرسالة" subtitle="ستصل نفس الرسالة لكل جهة بشكل منفصل." />

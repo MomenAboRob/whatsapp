@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { getAuthUserFromRequest } from '@/lib/auth';
 import { getWhatsAppManager } from '@/lib/whatsapp-client';
 import {
-  createSchedule, encryptSmtpPassword, readWorkspace, saveWorkspace, scanMentions,
+  createSchedule, encryptSmtpPassword, getArchivedChatsLookup, isArchivedChat, readWorkspace, saveWorkspace, scanMentions,
   sendToTargets, smtpConfigured, validateTargets, verifySmtp,
 } from '@/lib/whatsapp-workspace';
 
@@ -23,9 +23,10 @@ export async function GET(req: NextRequest) {
     saveWorkspace(user.id, data);
   }
   if (req.nextUrl.searchParams.get('summary') === '1') {
+    const archivedChats = getArchivedChatsLookup(wa);
     return NextResponse.json({
       success: true,
-      mentions: data.mentions.map((item) => ({ id: item.id, chatName: item.chatName, sender: item.sender, text: item.text, decision: item.decision })),
+      mentions: data.mentions.map((item) => ({ id: item.id, chatName: item.chatName, sender: item.sender, text: item.text, decision: item.decision, archived: isArchivedChat(wa, item.chatJid, item.chatName, archivedChats) })),
       settings: { browserEnabled: data.settings.browserEnabled },
     });
   }
@@ -198,10 +199,14 @@ export async function POST(req: NextRequest) {
   if (action === 'save_list') {
     const name = String(body.name || '').trim().slice(0, 80);
     if (!name) return bad('اكتب اسم القائمة');
-    let targets: string[];
-    try { targets = validateTargets(wa, body.targetJids); } catch (error) { return bad((error as Error).message); }
     const id = typeof body.id === 'string' && body.id ? body.id : randomUUID();
     const existing = data.recipientLists.find((list) => list.id === id);
+    let targets: string[];
+    if (existing && Array.isArray(body.targetJids) && body.targetJids.length === 0) {
+      targets = [];
+    } else {
+      try { targets = validateTargets(wa, body.targetJids); } catch (error) { return bad((error as Error).message); }
+    }
     if (!existing && data.recipientLists.length >= 100) return bad('وصلت إلى الحد الأقصى للقوائم');
     if (existing) { existing.name = name; existing.targetJids = targets; }
     else data.recipientLists.push({ id, name, targetJids: targets });

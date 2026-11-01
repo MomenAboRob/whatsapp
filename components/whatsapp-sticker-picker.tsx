@@ -124,7 +124,7 @@ export const WhatsAppStickerPicker = React.memo(function WhatsAppStickerPicker({
       <div
         ref={containerRef}
         dir="ltr"
-        className="absolute bottom-full mb-3 right-2 sm:right-6 z-50 w-[420px] max-w-[95vw] h-[410px] bg-[#202c33] border border-[#2a3942] rounded-2xl shadow-2xl flex flex-col overflow-hidden select-none animate-in fade-in zoom-in-95 duration-150"
+        className="absolute bottom-full mb-3 left-0 right-auto z-50 w-[calc(100vw_-_80px)] max-w-[420px] sm:left-auto sm:right-6 sm:w-[420px] sm:max-w-[95vw] h-[410px] bg-[#202c33] border border-[#2a3942] rounded-2xl shadow-2xl flex flex-col overflow-hidden select-none animate-in fade-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 1. الشريط العلوي لتبويبات الملصقات (🕒 أحدث، ⭐ المفضلة، حزم الملصقات، ➕ المتجر) */}

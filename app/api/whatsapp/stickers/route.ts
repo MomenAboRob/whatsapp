@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getWhatsAppManager } from '@/lib/whatsapp-client';
+import { dataPath } from '@/lib/data-storage';
 import { BUILTIN_STICKER_PACKS, WhatsAppSticker } from '@/lib/sticker-store';
 import fs from 'fs';
 import path from 'path';
@@ -18,7 +19,7 @@ function loadFavoriteStickers(waDir: string): WhatsAppSticker[] {
       const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
       if (Array.isArray(data)) return data;
     }
-    const rootP = path.join(process.cwd(), 'whatsapp_auth', 'favorite_stickers.json');
+    const rootP = dataPath('whatsapp_auth', 'favorite_stickers.json');
     if (fs.existsSync(rootP)) {
       const data = JSON.parse(fs.readFileSync(rootP, 'utf-8'));
       if (Array.isArray(data)) return data;
@@ -44,7 +45,7 @@ function saveFavoriteStickers(waDir: string, stickers: WhatsAppSticker[]) {
 
 export async function GET(req: NextRequest) {
   const wa = getWhatsAppManager(req);
-  const waDir = wa.authDir || path.join(process.cwd(), 'whatsapp_auth');
+  const waDir = wa.authDir || dataPath('whatsapp_auth');
   const favorites = loadFavoriteStickers(waDir);
   return NextResponse.json({
     success: true,
@@ -56,7 +57,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const wa = getWhatsAppManager(req);
-    const waDir = wa.authDir || path.join(process.cwd(), 'whatsapp_auth');
+  const waDir = wa.authDir || dataPath('whatsapp_auth');
     const body = await req.json();
     const { action, sticker, stickerUrl, chat } = body;
 

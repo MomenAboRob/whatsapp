@@ -6,6 +6,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createGzip, createGunzip } from 'node:zlib';
 import { getWhatsAppManager, type WhatsAppGroupItem } from '@/lib/whatsapp-client';
+import { dataPath } from '@/lib/data-storage';
 
 export type PortableBackupCounts = { messages: number; chats: number; media: number; missingMedia: number };
 
@@ -50,10 +51,10 @@ export async function createPortableBackupAt(userId: string, filePath: string) {
   const manager = getWhatsAppManager(userId);
   const messages = manager.getMessages();
   const groups = manager.getUserGroups();
-  const mediaDir = path.join(process.cwd(), 'whatsapp_media');
+  const mediaDir = dataPath('whatsapp_media');
   const names = mediaNames(messages);
   const present = names.filter((name) => fs.existsSync(path.join(mediaDir, name)));
-  const listsFile = path.join(process.cwd(), 'whatsapp_auth', `user_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`, 'custom_lists.json');
+  const listsFile = dataPath('whatsapp_auth', `user_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`, 'custom_lists.json');
   let lists: Record<string, string[]> = {};
   try { lists = JSON.parse(await fs.promises.readFile(listsFile, 'utf8')); } catch {}
   const counts: PortableBackupCounts = {
@@ -124,7 +125,7 @@ export async function restorePortableBackup(userId: string, compressedFile: stri
       } else throw new Error('صيغة النسخة غير معروفة.');
     }
     if (!header || !messages || !groups || messages.length !== header.messages || groups.length !== header.chats || mediaCount !== header.media) throw new Error('النسخة غير مكتملة.');
-    const mediaDir = path.join(process.cwd(), 'whatsapp_media');
+    const mediaDir = dataPath('whatsapp_media');
     await fs.promises.mkdir(mediaDir, { recursive: true });
     for (const name of await fs.promises.readdir(stagedMediaDir)) {
       const target = path.join(mediaDir, name);
@@ -132,7 +133,7 @@ export async function restorePortableBackup(userId: string, compressedFile: stri
     }
     const merged = getWhatsAppManager(userId).mergeRestoredHistory(messages, groups);
     if (lists) {
-      const file = path.join(process.cwd(), 'whatsapp_auth', `user_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`, 'custom_lists.json');
+      const file = dataPath('whatsapp_auth', `user_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`, 'custom_lists.json');
       let current: Record<string, string[]> = {};
       try { current = JSON.parse(await fs.promises.readFile(file, 'utf8')); } catch {}
       for (const [name, members] of Object.entries(lists)) {

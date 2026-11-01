@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import { dataPath } from '@/lib/data-storage';
 import { getAuthUserFromRequest } from '@/lib/auth';
 
 const MIME_MAP: Record<string, string> = {
@@ -31,8 +32,8 @@ export async function GET(
     const wa = getWhatsAppManager(request);
     if (!wa.canAccessAvatar(digits)) return NextResponse.json({ error: 'الصورة غير موجودة' }, { status: 404 });
 
-    const storageAvatarsDir = path.join(process.cwd(), 'whatsapp_avatars');
-    const publicAvatarsDir = path.join(process.cwd(), 'public', 'avatars');
+    const storageAvatarsDir = dataPath('whatsapp_avatars');
+    const publicAvatarsDir = dataPath('public', 'avatars');
     const targetFile = path.join(storageAvatarsDir, ...pathSegments);
     const legacyFile = path.join(publicAvatarsDir, ...pathSegments);
     const existingFile = fs.existsSync(targetFile) ? targetFile : fs.existsSync(legacyFile) ? legacyFile : null;

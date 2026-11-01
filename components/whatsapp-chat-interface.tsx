@@ -4668,7 +4668,7 @@ export function WhatsAppChatInterface({
     };
 
     const refreshStatusAndMaybeReconnect = async () => {
-      if (!isSubscribed || document.hidden) return;
+      if (!isSubscribed) return;
       try {
         const eventVersion = statusEventVersionRef.current;
         const response = await fetch('/api/whatsapp/status', { cache: 'no-store' });
@@ -4692,7 +4692,7 @@ export function WhatsAppChatInterface({
     };
 
     const refreshAfterResume = () => {
-      if (!isSubscribed || document.hidden) return;
+      if (!isSubscribed) return;
       // Android suspends the PWA's network stream while it is in the background.
       // Reload the server snapshot so messages received meanwhile appear immediately.
       const snapshotAt = lastMessageSnapshotAtRef.current;
@@ -4701,7 +4701,7 @@ export function WhatsAppChatInterface({
     };
 
     const connectSSE = () => {
-      if (!isSubscribed || document.hidden) return;
+      if (!isSubscribed) return;
       closeSSE();
       try {
         es = new EventSource('/api/whatsapp/events');
@@ -4949,13 +4949,14 @@ export function WhatsAppChatInterface({
 
         es.onerror = () => {
           closeSSE();
-          if (isSubscribed && !document.hidden) {
-            reconnectTimer = setTimeout(connectSSE, 1500);
+          if (isSubscribed) {
+            // إعادة محاولة الاتصال فوراً خلال 300ms لاستعادة المزامنة اللحظية
+            reconnectTimer = setTimeout(connectSSE, 300);
           }
         };
       } catch {
-        if (isSubscribed && !document.hidden) {
-          reconnectTimer = setTimeout(connectSSE, 1500);
+        if (isSubscribed) {
+          reconnectTimer = setTimeout(connectSSE, 500);
         }
       }
     };
@@ -4985,16 +4986,14 @@ export function WhatsAppChatInterface({
     const historyWarmupTimer = window.setTimeout(() => void warmFullHistoryCache(), 2500);
 
     const onResume = () => {
-      if (document.hidden || Date.now() - lastResumeAt < 1500) return;
+      if (Date.now() - lastResumeAt < 1000) return;
       lastResumeAt = Date.now();
-      connectSSE();
+      if (!es) connectSSE();
       refreshAfterResume();
     };
     const onVisibilityChange = () => {
-      if (document.hidden) closeSSE();
-      else {
-        // Even a very short background trip needs a fresh stream.
-        lastResumeAt = 0;
+      if (!document.hidden) {
+        // عند تنشيط النافذة، التحقق من عمل البث اللحظي وجلب آخر التحديثات
         onResume();
       }
     };
@@ -5012,7 +5011,7 @@ export function WhatsAppChatInterface({
 
     // فحص كل نصف ثانية للتغييرات الجديدة فقط عند انقطاع SSE؛ الاتصال المباشر يظل أسرع.
     const fallbackInterval = setInterval(() => {
-      if (!es && typeof document !== 'undefined' && !document.hidden && !fallbackSyncInFlight) {
+      if (!es && typeof document !== 'undefined' && !fallbackSyncInFlight) {
         fallbackSyncInFlight = true;
         const snapshotAt = lastMessageSnapshotAtRef.current;
         void fetchMessages(true, snapshotAt || undefined).finally(() => {
@@ -7461,7 +7460,15 @@ export function WhatsAppChatInterface({
 
     // 1. إظهار الرسالة فورياً في الشات مع علامة الساعة (Optimistic UI) كواتساب الحقيقي
     setMessages((prev) => [newMsg, ...prev.filter((item) => item.id !== newMsg.id)]);
-    setTimeout(() => scrollToBottom('smooth'), 40);
+    setTimeout(() => scrollToBottom('smooth'), 10);
+
+    // تفريغ خانة النص وقائمة المنشن فوراً لتشعر الواجهة بالسرعة الفائقة اللحظية
+    if (activeGroupRef.current === sendForChat) {
+      setMessageText('');
+      setPendingMentions([]);
+      setMentionMenu(null);
+      setReplyingToMessage(null);
+    }
 
     try {
       const res = await fetch('/api/whatsapp/messages', {
@@ -7475,14 +7482,15 @@ export function WhatsAppChatInterface({
       });
       const data = await res.json();
       if (data.sentMessage) {
-        setMessages((prev) => [
-          data.sentMessage,
-          ...prev.filter((item) =>
-            item.id !== newMsg.id &&
-            item.id !== data.sentMessage.id &&
-            item.id !== data.sentMessage.clientRequestId,
-          ),
-        ]);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === requestId ||
+            m.id === data.sentMessage.id ||
+            m.id === data.sentMessage.clientRequestId
+              ? { ...m, ...data.sentMessage }
+              : m
+          )
+        );
       } else if (data.messages && Array.isArray(data.messages)) {
         // توافق مؤقت مع النسخ القديمة من الخادم.
         setMessages(data.messages);
@@ -7490,20 +7498,13 @@ export function WhatsAppChatInterface({
       if (!res.ok || !data.success) {
         setMessages((prev) => prev.filter((item) => item.id !== newMsg.id));
         if (pendingTextSendRef.current?.id === requestId) pendingTextSendRef.current = null;
-        toast.warning(data.message || 'لم يحفظ الخادم الرسالة. أبقيت النص في خانة الكتابة لتعيد المحاولة.', 'تعذر الإرسال');
+        setMessageText(newMessageText);
+        toast.warning(data.message || 'لم يحفظ الخادم الرسالة. تم إرجاع النص لخانة الكتابة لتعيد المحاولة.', 'تعذر الإرسال');
       } else {
-        if (activeGroupRef.current === sendForChat && getMessageText() === newMessageText) {
-          setMessageText('');
-          setPendingMentions([]);
-          setMentionMenu(null);
-          setReplyingToMessage(null);
-        } else {
-          setPendingMentions((previous) => previous.filter((item) => !mentions.includes(item.jid)));
-        }
         if (pendingTextSendRef.current?.id === requestId) pendingTextSendRef.current = null;
       }
     } catch {
-      toast.error('لم يصل تأكيد الخادم بعد؛ أبقيت النص والرسالة كما هما. أعد الإرسال عند استقرار الاتصال.', 'تعذر تأكيد الإرسال');
+      toast.error('لم يصل تأكيد الخادم بعد؛ أبقيت الرسالة في المحادثة. ستتم المزامنة تلقائياً عند استقرار الاتصال.', 'تعذر تأكيد الإرسال');
     } finally {
       isSendingMessageRef.current = false;
       setIsSendingMsg(false);

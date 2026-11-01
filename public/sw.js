@@ -13,9 +13,9 @@ const STATIC_ASSETS = [
 self.addEventListener('push', (event) => {
   let payload = {};
   try { payload = event.data ? event.data.json() : {}; } catch {}
-  const title = payload.title || 'رسالة واتساب جديدة';
+  const title = payload.title || 'منشن واتساب جديد';
   event.waitUntil(self.registration.showNotification(title, {
-    body: payload.body || 'وصلتك رسالة جديدة',
+    body: payload.body || 'وصلك منشن جديد',
     icon: '/icons/icon-192.png',
     badge: '/icons/icon-192.png',
     tag: payload.tag || `whatsapp-${Date.now()}`,

@@ -56,7 +56,7 @@ export default function HomePage() {
         setNewMentions((data.mentions || []).filter((item: { decision: string }) => item.decision === 'new').length);
         if (seenMentions.current && data.settings?.browserEnabled && 'Notification' in window && Notification.permission === 'granted') {
           for (const item of data.mentions || []) {
-            if (seenMentions.current.has(item.id)) continue;
+            if (item.archived || seenMentions.current.has(item.id)) continue;
             new Notification(`منشن جديد في ${item.chatName}`, { body: `${item.sender}: ${item.text || 'رسالة وسائط'}`.slice(0, 160), tag: `mention-${item.id}` });
           }
         }

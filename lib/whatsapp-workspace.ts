@@ -6,6 +6,7 @@ import webpush from 'web-push';
 import type { ChatMessage, WhatsAppManager } from '@/lib/whatsapp-client';
 import { rawWhatsAppText } from '@/lib/whatsapp-message-text';
 import { renderMentionEmail } from '@/lib/mention-email';
+import { dataPath } from '@/lib/data-storage';
 
 export type MentionDecision = 'new' | 'dismissed' | 'important';
 export type TaskStatus = 'open' | 'done';
@@ -88,11 +89,9 @@ export interface WorkspaceData {
 const schedulerKeys = new Set<string>();
 const busyKeys = new Set<string>();
 const scannedFingerprints = new Map<string, string>();
-const notifiedOutgoingIds = new Set<string>();
-
 const cleanUserId = (userId: string) => userId.replace(/[^a-zA-Z0-9_-]/g, '_');
-const dataPath = (userId: string) => path.join(process.cwd(), 'whatsapp_auth', `user_${cleanUserId(userId)}`, 'workspace.json');
-const pushSubscriptionsPath = (userId: string) => path.join(process.cwd(), 'whatsapp_auth', `user_${cleanUserId(userId)}`, 'push_subscriptions.json');
+const workspaceFilePath = (userId: string) => dataPath('whatsapp_auth', `user_${cleanUserId(userId)}`, 'workspace.json');
+const pushSubscriptionsPath = (userId: string) => dataPath('whatsapp_auth', `user_${cleanUserId(userId)}`, 'push_subscriptions.json');
 const initialData = (): WorkspaceData => ({
   mentions: [],
   messageTasks: [],
@@ -104,7 +103,7 @@ const initialData = (): WorkspaceData => ({
 
 export function readWorkspace(userId: string): WorkspaceData {
   try {
-    const data = JSON.parse(fs.readFileSync(dataPath(userId), 'utf8'));
+    const data = JSON.parse(fs.readFileSync(workspaceFilePath(userId), 'utf8'));
     const defaults = initialData();
     return {
       mentions: Array.isArray(data.mentions) ? data.mentions : [],
@@ -120,7 +119,7 @@ export function readWorkspace(userId: string): WorkspaceData {
 }
 
 export function saveWorkspace(userId: string, data: WorkspaceData): void {
-  const file = dataPath(userId);
+  const file = workspaceFilePath(userId);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temp, JSON.stringify(data, null, 2), 'utf8');
@@ -188,6 +187,29 @@ export function isMentionForMe(message: ChatMessage, wa: WhatsAppManager): boole
     const digits = canonical.split('@')[0].replace(/\D/g, '');
     return canonical === ownJid || (ownPhone && digits === ownPhone);
   });
+}
+
+export interface ArchivedChatsLookup {
+  jids: Set<string>;
+  names: Set<string>;
+}
+
+export function getArchivedChatsLookup(wa: WhatsAppManager): ArchivedChatsLookup {
+  const jids = new Set<string>();
+  const names = new Set<string>();
+  for (const chat of wa.getUserGroups()) {
+    if (!chat.archived) continue;
+    jids.add(wa.getCanonicalChatJid(chat.id));
+    if (chat.name?.trim()) names.add(chat.name.trim());
+  }
+  return { jids, names };
+}
+
+export function isArchivedChat(wa: WhatsAppManager, chatJid?: string, chatName?: string, lookup = getArchivedChatsLookup(wa)): boolean {
+  const canonicalJid = chatJid ? wa.getCanonicalChatJid(chatJid) : '';
+  const name = chatName?.trim();
+  if (!canonicalJid && !name) return false;
+  return Boolean((canonicalJid && lookup.jids.has(canonicalJid)) || (name && lookup.names.has(name)));
 }
 
 function toMention(message: ChatMessage, wa: WhatsAppManager): MentionItem {
@@ -288,7 +310,7 @@ export function removePushSubscription(userId: string, endpoint: string): void {
   } catch {}
 }
 
-async function sendIncomingPush(wa: WhatsAppManager, message: ChatMessage): Promise<void> {
+async function sendMentionPush(wa: WhatsAppManager, message: ChatMessage): Promise<void> {
   if (!message.id || !process.env.WEB_PUSH_PUBLIC_KEY || !process.env.WEB_PUSH_PRIVATE_KEY) return;
   if (!readWorkspace(wa.userId).settings.browserEnabled) return;
   const file = pushSubscriptionsPath(wa.userId);
@@ -303,7 +325,7 @@ async function sendIncomingPush(wa: WhatsAppManager, message: ChatMessage): Prom
   }
   const chatName = message.chatName || 'محادثة واتساب';
   const body = `${message.senderName || message.sender || chatName}: ${message.text || (message.hasMedia ? 'رسالة وسائط' : 'رسالة جديدة')}`.slice(0, 220);
-  const payload = JSON.stringify({ title: `رسالة جديدة · ${chatName}`, body, tag: `whatsapp-${message.chatJid || chatName}`, url: '/' });
+  const payload = JSON.stringify({ title: `منشن جديد · ${chatName}`, body, tag: `mention-${message.id}`, url: '/' });
   const expired = new Set<string>();
   await Promise.all(subscriptions.map(async (subscription) => {
     try { await webpush.sendNotification(subscription, payload, { TTL: 60 * 60 }); }
@@ -313,34 +335,6 @@ async function sendIncomingPush(wa: WhatsAppManager, message: ChatMessage): Prom
     const remaining = subscriptions.filter((subscription) => !expired.has(subscription.endpoint));
     if (remaining.length) fs.writeFileSync(file, JSON.stringify(remaining), { mode: 0o600 });
     else fs.rmSync(file, { force: true });
-  }
-}
-
-/** Notify the account owner after a WhatsApp send succeeds. Never sends to chat recipients. */
-export async function notifyOutgoingMessage(wa: WhatsAppManager, message: ChatMessage): Promise<void> {
-  if (!message.isFromMe || !message.id || notifiedOutgoingIds.has(message.id)) return;
-  void sendIncomingPush(wa, message);
-  const settings = readWorkspace(wa.userId).settings;
-  if (!settings.emailEnabled || !settings.emailTo || !smtpConfigured(settings)) return;
-  notifiedOutgoingIds.add(message.id);
-  try {
-    const { transporter, user, custom } = smtpTransport(settings);
-    const chat = message.chatName || 'محادثة واتساب';
-    const preview = (message.text || (message.hasMedia ? 'رسالة وسائط' : 'رسالة')).slice(0, 500);
-    const escape = (value: string) => value.replace(/[&<>"']/g, (char) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    })[char] || char);
-    const appUrl = process.env.APP_PUBLIC_URL || '';
-    await transporter.sendMail({
-      from: custom ? user : process.env.SMTP_FROM || user,
-      to: settings.emailTo,
-      subject: `تم إرسال رسالة واتساب إلى ${chat}`,
-      text: `تم إرسال رسالة إلى ${chat}.\n\n${preview}\n\n${appUrl}`,
-      html: `<div dir="rtl" style="font-family:Arial,Tahoma,sans-serif;background:#f0f2f5;padding:24px;color:#111b21"><div style="max-width:520px;margin:auto;background:#fff;border-radius:16px;overflow:hidden"><div style="background:#075e54;color:#fff;padding:20px;font-size:20px;font-weight:bold">تم إرسال رسالة واتساب</div><div style="padding:22px"><p>المحادثة: <strong>${escape(chat)}</strong></p><div style="background:#d9fdd3;border-radius:12px;padding:16px;white-space:pre-wrap;line-height:1.8">${escape(preview)}</div>${appUrl ? `<p><a href="${escape(appUrl)}" style="color:#075e54;font-weight:bold">افتح التطبيق</a></p>` : ''}</div></div></div>`,
-    });
-  } catch (error) {
-    notifiedOutgoingIds.delete(message.id);
-    console.warn('تعذر إرسال تنبيه الرسالة الصادرة إلى البريد:', error);
   }
 }
 
@@ -361,7 +355,6 @@ async function sendMentionEmail(mention: MentionItem, settings: WorkspaceSetting
 }
 
 export async function recordLiveMention(wa: WhatsAppManager, message: ChatMessage): Promise<void> {
-  void sendIncomingPush(wa, message);
   if (!isMentionForMe(message, wa)) return;
   const data = readWorkspace(wa.userId);
   if (data.mentions.some((item) => item.id === message.id)) return;
@@ -369,6 +362,8 @@ export async function recordLiveMention(wa: WhatsAppManager, message: ChatMessag
   data.mentions.unshift(mention);
   data.mentions = data.mentions.slice(0, 3000);
   saveWorkspace(wa.userId, data);
+  if (isArchivedChat(wa, message.chatJid, message.chatName)) return;
+  void sendMentionPush(wa, message);
   try {
     await sendMentionEmail(mention, data.settings);
   } catch (error) {
