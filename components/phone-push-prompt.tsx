@@ -9,9 +9,19 @@ export function PhonePushPrompt() {
   const [message, setMessage] = useState('');
 
   useEffect(() => {
-    if (window.location.pathname === '/login' || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (window.location.pathname === '/login') return;
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+    const installed = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true;
+    // iOS Safari does not expose PushManager until the site is installed as a Home Screen app.
+    // Keep the activation banner visible so the user sees how to reach the supported mode.
+    if (isIOS && !installed) {
+      setVisible(true);
+      setMessage('لتفعيل إشعارات الآيفون، أضف التطبيق إلى الشاشة الرئيسية وافتحه منها.');
+      return;
+    }
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
     void navigator.serviceWorker.ready.then((registration) => registration.pushManager.getSubscription())
-      .then((subscription) => setVisible(!subscription && Notification.permission !== 'denied'))
+      .then((subscription) => setVisible(!subscription))
       .catch(() => {});
   }, []);
 
@@ -20,7 +30,13 @@ export function PhonePushPrompt() {
     try {
       const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
       const installed = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true;
-      if (isIOS && !installed) throw new Error('على الآيفون أضف التطبيق للشاشة الرئيسية أولاً، ثم افتحه منها لتفعيل الإشعارات.');
+      if (isIOS && !installed) {
+        setMessage('اضغط مشاركة في Safari، ثم «إضافة إلى الشاشة الرئيسية»، وافتح التطبيق من أيقونته. بعدها اضغط تفعيل الإشعارات.');
+        return;
+      }
+      if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+        throw new Error('هذا المتصفح لا يدعم إشعارات الهاتف بالخلفية. افتح التطبيق في Chrome أو ثبّته على شاشة الآيفون الرئيسية.');
+      }
       const permission = await Notification.requestPermission();
       if (permission !== 'granted') throw new Error('اسمح بإشعارات التطبيق من إعدادات المتصفح.');
       const configResponse = await fetch('/api/whatsapp/push', { cache: 'no-store' });
