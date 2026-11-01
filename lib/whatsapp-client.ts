@@ -2235,7 +2235,7 @@ export class WhatsAppManager {
         version: latestVersion.version,
         // Full history is requested only when linking this companion device by QR.
         // Existing linked sessions reconnect normally and do not replay the initial sync.
-        syncFullHistory: true,
+        syncFullHistory: !state.creds.registered,
         emitOwnEvents: true,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
