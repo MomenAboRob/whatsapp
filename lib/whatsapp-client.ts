@@ -1910,6 +1910,27 @@ export class WhatsAppManager {
         if (Array.isArray(parsed)) {
           const publicMediaDir = path.join(process.cwd(), 'public', 'media');
           const existingExts = ['webp', 'jpg', 'png', 'mp4', 'ogg', 'm4a', 'mp3', 'pdf'];
+          const mediaPriority = new Map(existingExts.map((ext, index) => [ext, index]));
+          const mediaIndex = new Map<string, { ext: string; priority: number; sourcePriority: number }>();
+          const indexMediaDirectory = (directory: string, sourcePriority: number) => {
+            try {
+              for (const filename of fs.readdirSync(directory)) {
+                const dot = filename.lastIndexOf('.');
+                if (dot <= 0) continue;
+                const ext = filename.slice(dot + 1).toLowerCase();
+                const priority = mediaPriority.get(ext);
+                if (priority === undefined) continue;
+                const id = filename.slice(0, dot);
+                const current = mediaIndex.get(id);
+                if (!current || priority < current.priority || (priority === current.priority && sourcePriority < current.sourcePriority)) {
+                  mediaIndex.set(id, { ext, priority, sourcePriority });
+                }
+              }
+            } catch {}
+          };
+          // Build one disk index instead of up to 16 synchronous existsSync calls per message.
+          indexMediaDirectory(this.mediaDir, 0);
+          indexMediaDirectory(publicMediaDir, 1);
           this.incomingMessages = parsed
             .filter((m: any) => !m.isDemo && !String(m.id).startsWith('msg_'))
             .map((m: any) => {
@@ -1925,14 +1946,10 @@ export class WhatsAppManager {
 
               // إذا كان للرسالة وسائط ولم يتوفر رابطها، فحص القرص فوراً
               if (m.hasMedia && !m.mediaUrl) {
-                for (const ext of existingExts) {
-                  const checkP = path.join(this.mediaDir, `${m.id}.${ext}`);
-                  const legacyP = path.join(publicMediaDir, `${m.id}.${ext}`);
-                  if (fs.existsSync(checkP) || fs.existsSync(legacyP)) {
-                    m.mediaUrl = `/media/${m.id}.${ext}`;
-                    m.mediaType = ext === 'webp' ? 'sticker' : ext === 'mp4' ? 'video' : ['ogg', 'm4a', 'mp3'].includes(ext) ? 'audio' : ext === 'pdf' ? 'document' : 'image';
-                    break;
-                  }
+                const media = mediaIndex.get(m.id);
+                if (media) {
+                  m.mediaUrl = `/media/${m.id}.${media.ext}`;
+                  m.mediaType = media.ext === 'webp' ? 'sticker' : media.ext === 'mp4' ? 'video' : ['ogg', 'm4a', 'mp3'].includes(media.ext) ? 'audio' : media.ext === 'pdf' ? 'document' : 'image';
                 }
               }
 
