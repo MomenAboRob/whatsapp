@@ -6189,11 +6189,10 @@ export function WhatsAppChatInterface({
       if (typeof window !== 'undefined') window.close();
       return;
     }
+    setActiveGroup('');
     if (isMobileViewport() && window.history.state?.hawalatGuard) {
       window.history.back();
-      return;
     }
-    setActiveGroup('');
   };
 
   useEffect(() => {
@@ -6242,8 +6241,12 @@ export function WhatsAppChatInterface({
   const targetJumpMsgIdRef = useRef<string | null>(null);
 
   const handleSelectChat = async (groupName: string, targetMsgId?: string) => {
-    if (isMobileViewport() && !window.history.state?.hawalatGuard) {
-      window.history.pushState({ ...window.history.state, hawalatGuard: true }, '');
+    if (isMobileViewport()) {
+      if (window.history.state?.hawalatGuard) {
+        window.history.replaceState({ ...window.history.state, hawalatGuard: true, hawalatChatOpen: true }, '');
+      } else {
+        window.history.pushState({ ...window.history.state, hawalatGuard: true, hawalatChatOpen: true }, '');
+      }
     }
     const selectedGroup = realGroups.find((group) => group.name === groupName || group.id === groupName);
     const selectedKey = selectedGroup?.id || groupName;

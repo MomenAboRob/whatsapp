@@ -108,12 +108,12 @@ export default function HomePage() {
       </nav>}
       <div className={`min-h-0 flex-1 ${view === 'whatsapp' || popoutChat ? 'block' : 'hidden'}`}>
         <WhatsAppChatInterface
-          key={selectedChat || popoutChat || 'main'}
           isPopoutMode={Boolean(popoutChat)}
           initialChat={selectedChat || popoutChat || ''}
           onOpenReview={() => {}}
           onOpenQRModal={() => setIsQRModalOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
+          onActiveChatChange={(isOpen) => { if (isOpen && selectedChat) setSelectedChat(''); }}
           onScheduleChat={(chat, text) => openCompose(chat.id, text)}
           onCreateTask={(message) => {
             if (popoutChat) {
