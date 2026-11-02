@@ -284,6 +284,7 @@ export class WhatsAppManager {
   private phoneToLidMap: Record<string, string> = {};
   private avatarsMap: Record<string, string> = {};
   private messageIndex = new Map<string, ChatMessage>();
+  private groupMetadataCache = new Map<string, { data: any; cachedAt: number }>();
   private lidMappingsLoaded = false;
   private presenceKeepAliveTimer: NodeJS.Timeout | null = null;
   private pendingReactionsMap: Map<string, any[]> = new Map();
@@ -2191,6 +2192,9 @@ export class WhatsAppManager {
     const requestId = message.id || `msg_real_${Date.now()}`;
     const targetChat = message.chatJid || message.chatName;
 
+    const isWaConnected = Boolean(this.sock && this.connectionStatus === 'CONNECTED' && this.sock.ws?.isOpen !== false);
+    const initialStatus = isWaConnected ? 'sent' : 'pending';
+
     const queuedMessage: ChatMessage = {
       ...message,
       id: requestId,
@@ -2198,7 +2202,9 @@ export class WhatsAppManager {
       isFromMe: true,
       sender: 'أنا',
       senderName: 'أنا',
-      deliveryStatus: 'pending',
+      deliveryStatus: (message.deliveryStatus && message.deliveryStatus !== 'pending')
+        ? message.deliveryStatus
+        : initialStatus,
     };
 
     const existingMsg = this.findMessageById(requestId);
@@ -2212,7 +2218,7 @@ export class WhatsAppManager {
 
     this.outgoingQueue.set(requestId, {
       requestId,
-      status: 'pending',
+      status: isWaConnected ? 'sent' : 'pending',
       message: queuedMessage,
       updatedAt: Date.now(),
     });
@@ -2267,9 +2273,9 @@ export class WhatsAppManager {
     this.emitOutgoingMessage(queuedMessage);
     return {
       success: true,
-      queued: true,
+      queued: !isWaConnected,
       sentMessage: queuedMessage,
-      message: 'تم حفظ الرسالة وبدأ إرسالها مباشرة.',
+      message: isWaConnected ? 'تم إرسال الرسالة عبر واتساب.' : 'تم حفظ الرسالة وبدأ إرسالها مباشرة.',
     };
   }
 
@@ -2523,6 +2529,7 @@ export class WhatsAppManager {
         markOnlineOnConnect: true,
         generateHighQualityLinkPreview: false,
         shouldSyncHistoryMessage: () => true,
+        cachedGroupMetadata: (jid: string) => this.getGroupMetadataCached(jid),
         getMessage: async (key) => {
           const found = this.findMessageById(key.id || '');
           if (found?.rawBaileysMessage?.message) {
@@ -2533,6 +2540,31 @@ export class WhatsAppManager {
       });
 
       this.sock.ev.on('creds.update', saveCreds);
+
+      this.sock.ev.on('groups.update', async (updates: any[]) => {
+        if (!Array.isArray(updates)) return;
+        for (const update of updates) {
+          if (update?.id) {
+            try {
+              const metadata = await this.sock?.groupMetadata(update.id);
+              if (metadata) {
+                this.groupMetadataCache.set(update.id, { data: metadata, cachedAt: Date.now() });
+              }
+            } catch {}
+          }
+        }
+      });
+
+      this.sock.ev.on('group-participants.update', async (event: any) => {
+        if (event?.id) {
+          try {
+            const metadata = await this.sock?.groupMetadata(event.id);
+            if (metadata) {
+              this.groupMetadataCache.set(event.id, { data: metadata, cachedAt: Date.now() });
+            }
+          } catch {}
+        }
+      });
 
       this.sock.ev.on('presence.update', (update: {
         id: string;
@@ -3205,6 +3237,7 @@ export class WhatsAppManager {
       const participatingGroups = await this.sock.groupFetchAllParticipating();
       const groupsById = new Map(this.userGroups.map((group) => [group.id, group]));
       for (const [id, grp] of Object.entries<any>(participatingGroups)) {
+        this.groupMetadataCache.set(id, { data: grp, cachedAt: Date.now() });
         const existing = groupsById.get(id);
         if (existing) {
           existing.name = grp.subject || existing.name;
@@ -3769,6 +3802,26 @@ export class WhatsAppManager {
         ? this.phoneToLidMap[id] && `${this.phoneToLidMap[id]}@lid`
         : undefined;
     return alternate && alternate !== normalized ? [normalized, alternate] : [normalized];
+  }
+
+  public async getGroupMetadataCached(jid: string): Promise<any> {
+    if (!jid || !jid.endsWith('@g.us')) return undefined;
+    const cached = this.groupMetadataCache.get(jid);
+    if (cached && Date.now() - cached.cachedAt < 30 * 60 * 1000) {
+      return cached.data;
+    }
+    if (this.sock?.groupMetadata) {
+      try {
+        const data = await this.sock.groupMetadata(jid);
+        if (data) {
+          this.groupMetadataCache.set(jid, { data, cachedAt: Date.now() });
+          return data;
+        }
+      } catch {
+        if (cached) return cached.data;
+      }
+    }
+    return cached?.data;
   }
 
   public async subscribePresence(jid: string): Promise<WhatsAppPresence[]> {
@@ -4402,6 +4455,10 @@ export class WhatsAppManager {
         quotedMsgId,
         quotedPayload
       );
+      const fastSendOptions = {
+        ...sendOptions,
+        useCachedGroupMetadata: true,
+      };
       // إرسال مباشر عبر Baileys بالمعرف القياسي لواتساب لضمان قبول الخادم وتسليم الرسالة فوراً
       const sendTimeoutMs = mediaBase64 ? 90_000 : 30_000;
       const sendTimeoutMessage = 'لم يصل تأكيد واتساب خلال المهلة المحددة؛ بقيت الرسالة معلقة لإعادة المحاولة.';
@@ -4436,7 +4493,7 @@ export class WhatsAppManager {
               caption: messageText || '',
               ...mentionOpts,
             },
-              sendOptions
+              fastSendOptions
             ), sendTimeoutMs, sendTimeoutMessage);
         } else {
             sentMsg = await withTimeout(this.sock.sendMessage(
@@ -4445,7 +4502,7 @@ export class WhatsAppManager {
               text: messageText,
               ...mentionOpts,
             },
-              sendOptions
+              fastSendOptions
             ), sendTimeoutMs, sendTimeoutMessage);
         }
       } else {
@@ -4456,7 +4513,7 @@ export class WhatsAppManager {
             text: messageText,
             ...mentionOpts,
           },
-            sendOptions
+            fastSendOptions
           ), sendTimeoutMs, sendTimeoutMessage);
       }
 
@@ -5062,6 +5119,10 @@ export class WhatsAppManager {
         mediaData.quotedMsgId,
         mediaData.quotedPayload
       );
+      const fastSendOptions = {
+        ...sendOptions,
+        useCachedGroupMetadata: true,
+      };
 
       // 5. إرسال الرسالة عبر بروتوكول Baileys حسب نوع الوسائط
       let sentMsg: any = null;
@@ -5073,7 +5134,7 @@ export class WhatsAppManager {
             caption: mediaData.caption || '',
             mimetype: mediaData.mimetype || 'image/jpeg',
           },
-          sendOptions
+          fastSendOptions
         );
       } else if (mediaData.mediaType === 'video') {
         sentMsg = await this.sock.sendMessage(
@@ -5083,7 +5144,7 @@ export class WhatsAppManager {
             caption: mediaData.caption || '',
             mimetype: mediaData.mimetype || 'video/mp4',
           },
-          sendOptions
+          fastSendOptions
         );
       } else if (mediaData.mediaType === 'sticker') {
         sentMsg = await this.sock.sendMessage(
@@ -5091,7 +5152,7 @@ export class WhatsAppManager {
           {
             sticker: fileBuf,
           },
-          sendOptions
+          fastSendOptions
         );
       } else if (mediaData.mediaType === 'document') {
         sentMsg = await this.sock.sendMessage(
@@ -5102,7 +5163,7 @@ export class WhatsAppManager {
             mimetype: mediaData.mimetype || 'application/octet-stream',
             caption: mediaData.caption || '',
           },
-          sendOptions
+          fastSendOptions
         );
       } else if (mediaData.mediaType === 'audio' || mediaData.mediaType === 'voice') {
         const isPtt = mediaData.mediaType === 'voice' || mediaData.ptt === true;
@@ -5113,7 +5174,7 @@ export class WhatsAppManager {
             mimetype: mediaData.mimetype || (isPtt ? 'audio/ogg; codecs=opus' : 'audio/mp4'),
             ptt: isPtt,
           },
-          sendOptions
+          fastSendOptions
         );
       }
 

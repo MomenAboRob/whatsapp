@@ -3936,6 +3936,11 @@ export function WhatsAppChatInterface({
       }
     }
 
+    const isConnected = waStatus.status === 'CONNECTED';
+    if (status === 'pending' && isConnected) {
+      status = 'sent';
+    }
+
     if (status === 'pending') {
       return (
         <button
@@ -4751,7 +4756,12 @@ export function WhatsAppChatInterface({
               );
               if (existingIdx !== -1) {
                 const updated = [...prev];
-                updated[existingIdx] = { ...updated[existingIdx], ...newMsg };
+                const prevMsg = updated[existingIdx];
+                const mergedDeliveryStatus =
+                  (waStatus.status === 'CONNECTED' && newMsg.deliveryStatus === 'pending' && prevMsg.deliveryStatus === 'sent')
+                    ? 'sent'
+                    : (newMsg.deliveryStatus || prevMsg.deliveryStatus);
+                updated[existingIdx] = { ...prevMsg, ...newMsg, deliveryStatus: mergedDeliveryStatus };
                 return updated;
               }
               return [newMsg, ...prev];

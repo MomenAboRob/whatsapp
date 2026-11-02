@@ -172,7 +172,7 @@ export async function POST(req: NextRequest) {
         isFromMe: true,
         sender: 'أنا',
         senderName: 'أنا',
-        deliveryStatus: 'pending',
+        deliveryStatus: isConnected ? 'sent' : 'pending',
       };
 
       if (!targetChat) {
