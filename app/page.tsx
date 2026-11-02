@@ -69,6 +69,30 @@ export default function HomePage() {
   }, [popoutChat]);
 
   useEffect(() => {
+    if (popoutChat) return;
+    const prefetch = () => {
+      fetch('/api/whatsapp/workspace', { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((data) => {
+          if (typeof window !== 'undefined' && data) {
+            (window as any).__WORKSPACE_PREFETCH__ = data;
+          }
+        })
+        .catch(() => {});
+      fetch('/api/whatsapp/number-center', { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((data) => {
+          if (typeof window !== 'undefined' && data) {
+            (window as any).__NUMBER_CENTER_PREFETCH__ = data;
+          }
+        })
+        .catch(() => {});
+    };
+    const timer = setTimeout(prefetch, 300);
+    return () => clearTimeout(timer);
+  }, [popoutChat]);
+
+  useEffect(() => {
     if (!isSettingsOpen) return;
     void Promise.all([
       fetch('/api/auth/me').then((response) => response.json()),
@@ -128,18 +152,24 @@ export default function HomePage() {
           }}
         />
       </div>
-      {!popoutChat && view === 'numbers' && <div className="min-h-0 flex-1"><WhatsAppNumberCenter onPrepareMessage={openCompose} /></div>}
-      {!popoutChat && (view === 'dashboard' || view === 'compose') && <div className="min-h-0 flex-1">
-        <WhatsAppWorkspace
-          key={`${view}-${composeRevision}-${taskRevision}`}
-          view={view}
-          initialTarget={composeTarget}
-          initialText={composeText}
-          initialTask={taskMessage}
-          onOpenChat={openChat}
-          onTaskDraftConsumed={() => setTaskMessage(null)}
-        />
-      </div>}
+      {!popoutChat && (
+        <div className={`min-h-0 flex-1 ${view === 'numbers' ? 'block' : 'hidden'}`}>
+          <WhatsAppNumberCenter onPrepareMessage={openCompose} />
+        </div>
+      )}
+      {!popoutChat && (
+        <div className={`min-h-0 flex-1 ${view === 'dashboard' || view === 'compose' ? 'block' : 'hidden'}`}>
+          <WhatsAppWorkspace
+            key={`${view === 'compose' ? 'compose' : 'dashboard'}-${composeRevision}-${taskRevision}`}
+            view={view === 'compose' ? 'compose' : 'dashboard'}
+            initialTarget={composeTarget}
+            initialText={composeText}
+            initialTask={taskMessage}
+            onOpenChat={openChat}
+            onTaskDraftConsumed={() => setTaskMessage(null)}
+          />
+        </div>
+      )}
       {isQRModalOpen && (
         <WhatsAppQRModal
           isOpen={isQRModalOpen}

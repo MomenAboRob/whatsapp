@@ -232,7 +232,8 @@ export function scanMentions(wa: WhatsAppManager): WorkspaceData {
   if (scannedFingerprints.get(wa.userId) === fingerprint) return data;
   const known = new Map(data.mentions.map((mention) => [mention.id, mention]));
   let changed = false;
-  for (const message of messages) {
+  const recentMessages = messages.length > 500 ? messages.slice(0, 500) : messages;
+  for (const message of recentMessages) {
     const existing = known.get(message.id);
     if (existing) {
       const original = rawWhatsAppText(message.rawBaileysMessage);

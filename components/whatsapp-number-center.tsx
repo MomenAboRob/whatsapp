@@ -10,8 +10,17 @@ type Branch = { id: string; name: string; members: Array<{ id: string; name: str
 type Snapshot = { files: FileSummary[]; allocations: AllocationSummary[]; contacts: Contact[]; branches: Branch[] };
 type BatchPreview = { id: string; branchName: string; fileName: string; active: boolean; allocations: Array<{ id: string; personJid: string; personName: string; count: number; text: string }>; dispatch: null | { status: 'running' | 'paused' | 'completed' | 'canceled'; items: Array<{ allocationId: string; status: 'pending' | 'sending' | 'sent' | 'failed' | 'uncertain'; error?: string }> } };
 
+let numberCenterCache: Snapshot | null = null;
+
 export function WhatsAppNumberCenter({ onPrepareMessage }: { onPrepareMessage: (target: string, text: string) => void }) {
-  const [data, setData] = useState<Snapshot | null>(null);
+  const [data, setData] = useState<Snapshot | null>(() => {
+    if (numberCenterCache) return numberCenterCache;
+    if (typeof window !== 'undefined' && (window as any).__NUMBER_CENTER_PREFETCH__) {
+      numberCenterCache = (window as any).__NUMBER_CENTER_PREFETCH__;
+      return numberCenterCache;
+    }
+    return null;
+  });
   const [fileId, setFileId] = useState('');
   const [branchId, setBranchId] = useState('');
   const [editingBranchId, setEditingBranchId] = useState('');
@@ -30,6 +39,7 @@ export function WhatsAppNumberCenter({ onPrepareMessage }: { onPrepareMessage: (
     const response = await fetch('/api/whatsapp/number-center', { cache: 'no-store' });
     const json = await response.json();
     if (!response.ok) throw new Error(json.error || 'تعذر تحميل مركز الملفات');
+    numberCenterCache = json;
     setData(json);
     setFileId((current) => json.files.some((file: FileSummary) => file.id === current) ? current : '');
     setBranchId((current) => json.branches.some((branch: Branch) => branch.id === current) ? current : '');

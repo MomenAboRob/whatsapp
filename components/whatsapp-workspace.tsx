@@ -31,6 +31,8 @@ const inputDate = (value: string) => {
 type TaskEntry = { id: string; chatJid?: string; chatName: string; sender: string; text: string; task: TaskDetails };
 type TaskDraft = { source: 'mention' | 'message' | 'manual' | 'edit'; id: string; chatName: string; text: string; task?: TaskDetails };
 
+let workspaceCache: Snapshot | null = null;
+
 export function WhatsAppWorkspace({
   view, initialText = '', initialTarget = '', initialTask, onOpenChat, onTaskDraftConsumed,
 }: {
@@ -41,8 +43,15 @@ export function WhatsAppWorkspace({
   onOpenChat: (chatJid: string) => void;
   onTaskDraftConsumed?: () => void;
 }) {
-  const [data, setData] = useState<Snapshot | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<Snapshot | null>(() => {
+    if (workspaceCache) return workspaceCache;
+    if (typeof window !== 'undefined' && (window as any).__WORKSPACE_PREFETCH__) {
+      workspaceCache = (window as any).__WORKSPACE_PREFETCH__;
+      return workspaceCache;
+    }
+    return null;
+  });
+  const [loading, setLoading] = useState(() => !workspaceCache && !(typeof window !== 'undefined' && (window as any).__WORKSPACE_PREFETCH__));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
   const [search, setSearch] = useState('');
@@ -71,6 +80,7 @@ export function WhatsAppWorkspace({
       const response = await fetch('/api/whatsapp/workspace', { cache: 'no-store' });
       const json = await response.json();
       if (!response.ok) throw new Error(json.error || 'تعذر تحميل البيانات');
+      workspaceCache = json;
       setData(json);
       setError('');
     } catch (err) {
