@@ -2647,8 +2647,8 @@ export function WhatsAppChatInterface({
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.message || data.error || 'تعذر إرسال الصورة');
       if (data.sentMessage) {
-        setMessages((prev) => prev.some((item) => item.id === data.sentMessage.id)
-          ? prev.map((item) => item.id === data.sentMessage.id ? { ...item, ...data.sentMessage } : item)
+        setMessages((prev) => prev.some((item) => item.id === data.sentMessage.id || (data.sentMessage.clientRequestId && item.id === data.sentMessage.clientRequestId))
+          ? prev.map((item) => item.id === data.sentMessage.id || (data.sentMessage.clientRequestId && item.id === data.sentMessage.clientRequestId) ? { ...item, ...data.sentMessage } : item)
           : [data.sentMessage, ...prev]);
       } else {
         void fetchMessages();
@@ -4548,7 +4548,10 @@ export function WhatsAppChatInterface({
     setMessages((prev) => {
       if (incoming.length === 0) return prev;
       const byId = new Map<string, any>(prev.map((message) => [message.id, message]));
-      for (const message of incoming) byId.set(message.id, message);
+      for (const message of incoming) {
+        if (message.clientRequestId) byId.delete(message.clientRequestId);
+        byId.set(message.id, message);
+      }
       return Array.from(byId.values()).sort((a, b) => (b.timestampMs || 0) - (a.timestampMs || 0));
     });
     if (persistChatCache && incoming.length > 0 && incoming.length <= 1000) {
@@ -7439,6 +7442,7 @@ export function WhatsAppChatInterface({
     const targetGroup = realGroups.find((g) => g.name === activeGroup || g.id === activeGroup);
     const targetChatJid = targetGroup?.id || messages.find((m) => (m.chatName === activeGroup || m.senderName === activeGroup) && m.chatJid)?.chatJid;
 
+    const isWaConnected = waStatus.status === 'CONNECTED';
     const newMsg = {
       id: requestId,
       sender: 'أنا',
@@ -7449,7 +7453,7 @@ export function WhatsAppChatInterface({
       timestamp: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
       timestampMs: nowMs,
       isFromMe: true,
-      deliveryStatus: 'pending',
+      deliveryStatus: (isWaConnected ? 'sent' : 'pending') as 'sent' | 'pending',
       isForwarded: false,
       status: {},
       quotedMessage: quotedMsgPayload,
@@ -7486,7 +7490,7 @@ export function WhatsAppChatInterface({
           prev.map((m) =>
             m.id === requestId ||
             m.id === data.sentMessage.id ||
-            m.id === data.sentMessage.clientRequestId
+            (data.sentMessage.clientRequestId && m.id === data.sentMessage.clientRequestId)
               ? { ...m, ...data.sentMessage }
               : m
           )

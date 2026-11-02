@@ -1246,9 +1246,7 @@ export class WhatsAppManager {
       }
     }
 
-    const msg = this.incomingMessages.find(
-      (m) => m.id === targetMsgId || m.rawBaileysMessage?.key?.id === targetMsgId
-    );
+    const msg = this.findMessageById(targetMsgId);
 
     // 1. تحديث التفاعلات إذا وُجدت
     if (u.update?.reactions && Array.isArray(u.update.reactions)) {
@@ -2150,10 +2148,14 @@ export class WhatsAppManager {
       senderName: 'أنا',
       deliveryStatus: 'pending',
     };
-    const existingIndex = this.incomingMessages.findIndex((item) => item.id === requestId);
-    if (existingIndex >= 0) this.incomingMessages[existingIndex] = queuedMessage;
-    else this.incomingMessages.unshift(queuedMessage);
-    this.indexMessage(queuedMessage);
+    const existingMsg = this.findMessageById(requestId);
+    if (existingMsg) {
+      Object.assign(existingMsg, queuedMessage);
+      this.indexMessage(existingMsg);
+    } else {
+      this.incomingMessages.unshift(queuedMessage);
+      this.indexMessage(queuedMessage);
+    }
 
     this.outgoingQueue.set(requestId, {
       requestId,
@@ -2199,10 +2201,14 @@ export class WhatsAppManager {
       deliveryStatus: 'pending',
     };
 
-    const existingIndex = this.incomingMessages.findIndex((item) => item.id === requestId);
-    if (existingIndex >= 0) this.incomingMessages[existingIndex] = queuedMessage;
-    else this.incomingMessages.unshift(queuedMessage);
-    this.indexMessage(queuedMessage);
+    const existingMsg = this.findMessageById(requestId);
+    if (existingMsg) {
+      Object.assign(existingMsg, queuedMessage);
+      this.indexMessage(existingMsg);
+    } else {
+      this.incomingMessages.unshift(queuedMessage);
+      this.indexMessage(queuedMessage);
+    }
 
     this.outgoingQueue.set(requestId, {
       requestId,
@@ -2229,7 +2235,7 @@ export class WhatsAppManager {
 
         const res = await withTimeout(sendPromise, 7000, 'مهلة الإرسال المباشر انتهت');
         if (res.success && res.messageId) {
-          const sentMessage = this.findMessageById(res.messageId) || this.incomingMessages.find((m) => m.id === res.messageId);
+          const sentMessage = this.findMessageById(res.messageId) || this.findMessageById(requestId);
           if (sentMessage) {
             const queueEntry = this.outgoingQueue.get(requestId);
             if (queueEntry) {
@@ -3996,7 +4002,7 @@ export class WhatsAppManager {
       groupName = foundGroup.name || target;
       chatJid = foundGroup.id;
       sendJid = foundGroup.id;
-      if (foundGroup.phone) {
+      if (!foundGroup.id.endsWith('@g.us') && foundGroup.phone) {
         const p = foundGroup.phone.replace(/\D/g, '');
         if (p) {
           sendJid = `${p}@s.whatsapp.net`;
@@ -4095,7 +4101,7 @@ export class WhatsAppManager {
    * إعادة محاولة إرسال رسالة معلقة محددة فوراً
    */
   public async retryPendingMessage(msgId: string, fallbackMessage?: ChatMessage): Promise<{ success: boolean; message: string; messageId?: string; queued?: boolean }> {
-    const msg = this.incomingMessages.find((m) => m.id === msgId) ||
+    const msg = this.findMessageById(msgId) ||
       (fallbackMessage?.id === msgId ? fallbackMessage : undefined);
     if (!msg) {
       return { success: false, message: 'الرسالة غير موجودة في السجل' };
@@ -4396,9 +4402,7 @@ export class WhatsAppManager {
         quotedMsgId,
         quotedPayload
       );
-      const stableSendOptions = existingMessageId
-        ? { ...sendOptions, messageId: existingMessageId }
-        : sendOptions;
+      // إرسال مباشر عبر Baileys بالمعرف القياسي لواتساب لضمان قبول الخادم وتسليم الرسالة فوراً
       const sendTimeoutMs = mediaBase64 ? 90_000 : 30_000;
       const sendTimeoutMessage = 'لم يصل تأكيد واتساب خلال المهلة المحددة؛ بقيت الرسالة معلقة لإعادة المحاولة.';
 
@@ -4432,7 +4436,7 @@ export class WhatsAppManager {
               caption: messageText || '',
               ...mentionOpts,
             },
-              stableSendOptions
+              sendOptions
             ), sendTimeoutMs, sendTimeoutMessage);
         } else {
             sentMsg = await withTimeout(this.sock.sendMessage(
@@ -4441,7 +4445,7 @@ export class WhatsAppManager {
               text: messageText,
               ...mentionOpts,
             },
-              stableSendOptions
+              sendOptions
             ), sendTimeoutMs, sendTimeoutMessage);
         }
       } else {
@@ -4452,7 +4456,7 @@ export class WhatsAppManager {
             text: messageText,
             ...mentionOpts,
           },
-            stableSendOptions
+            sendOptions
           ), sendTimeoutMs, sendTimeoutMessage);
       }
 
@@ -4461,24 +4465,21 @@ export class WhatsAppManager {
 
       // إذا كانت الرسالة موجودة مسبقاً في طابور الانتظار (offline queue)، نحدّثها في مكانها دون تكرار
       if (existingMessageId) {
-        const existingIdx = this.incomingMessages.findIndex((m) => m.id === existingMessageId);
-        if (existingIdx !== -1) {
-          this.incomingMessages[existingIdx] = {
-            ...this.incomingMessages[existingIdx],
-            id: msgId,
-            clientRequestId: existingMessageId,
-            chatName: groupName,
-            chatJid: chatJid,
-            deliveryStatus: 'sent',
-            rawBaileysMessage: sentMsg,
-            timestampMs: Date.now(),
-            isFromMe: true,
-            sender: 'أنا',
-            senderName: 'أنا',
-          };
-          this.indexMessage(this.incomingMessages[existingIdx]);
+        const existing = this.findMessageById(existingMessageId);
+        if (existing) {
+          existing.id = msgId;
+          existing.clientRequestId = existingMessageId;
+          existing.chatName = groupName;
+          existing.chatJid = chatJid;
+          existing.deliveryStatus = 'sent';
+          existing.rawBaileysMessage = sentMsg;
+          existing.timestampMs = Date.now();
+          existing.isFromMe = true;
+          existing.sender = 'أنا';
+          existing.senderName = 'أنا';
+          this.indexMessage(existing);
           this.persistData();
-          this.emitOutgoingMessage(this.incomingMessages[existingIdx]);
+          this.emitOutgoingMessage(existing);
           return {
             success: true,
             message: `تم إرسال الرسالة إلى (${groupName}) بنجاح عبر واتساب.`,
@@ -4517,30 +4518,27 @@ export class WhatsAppManager {
         rawBaileysMessage: sentMsg,
       };
 
-      const existingIdx = this.incomingMessages.findIndex((m) => m.id === msgId);
-      if (existingIdx !== -1) {
-        this.incomingMessages[existingIdx] = {
-          ...this.incomingMessages[existingIdx],
-          clientRequestId: existingMessageId || this.incomingMessages[existingIdx].clientRequestId,
-          hasMedia: Boolean(resolvedMediaUrl) || this.incomingMessages[existingIdx].hasMedia,
-          mediaUrl: resolvedMediaUrl || this.incomingMessages[existingIdx].mediaUrl,
-          mediaType: resolvedMediaUrl ? 'image' : this.incomingMessages[existingIdx].mediaType,
-          linkedReceiptUrl: resolvedMediaUrl || this.incomingMessages[existingIdx].linkedReceiptUrl,
-          deliveryStatus: 'sent',
-          chatName: groupName,
-          chatJid: chatJid,
-          status: {
-            ...this.incomingMessages[existingIdx].status,
-            forwardedTo: groupName,
-            ...(resolvedMediaUrl ? { linkedImageUrl: resolvedMediaUrl } : {}),
-          },
-          quotedMessage: quotedPreview || this.incomingMessages[existingIdx].quotedMessage,
-          rawBaileysMessage: sentMsg || this.incomingMessages[existingIdx].rawBaileysMessage,
-          timestampMs: this.incomingMessages[existingIdx].timestampMs || Date.now(),
-          isFromMe: true,
-          sender: 'أنا',
-          senderName: 'أنا',
+      const existingMsg = this.findMessageById(msgId);
+      if (existingMsg) {
+        existingMsg.clientRequestId = existingMessageId || existingMsg.clientRequestId;
+        existingMsg.hasMedia = Boolean(resolvedMediaUrl) || existingMsg.hasMedia;
+        existingMsg.mediaUrl = resolvedMediaUrl || existingMsg.mediaUrl;
+        existingMsg.mediaType = resolvedMediaUrl ? 'image' : existingMsg.mediaType;
+        existingMsg.linkedReceiptUrl = resolvedMediaUrl || existingMsg.linkedReceiptUrl;
+        existingMsg.deliveryStatus = 'sent';
+        existingMsg.chatName = groupName;
+        existingMsg.chatJid = chatJid;
+        existingMsg.status = {
+          ...existingMsg.status,
+          forwardedTo: groupName,
+          ...(resolvedMediaUrl ? { linkedImageUrl: resolvedMediaUrl } : {}),
         };
+        existingMsg.quotedMessage = quotedPreview || existingMsg.quotedMessage;
+        existingMsg.rawBaileysMessage = sentMsg || existingMsg.rawBaileysMessage;
+        existingMsg.timestampMs = existingMsg.timestampMs || Date.now();
+        existingMsg.isFromMe = true;
+        existingMsg.sender = 'أنا';
+        existingMsg.senderName = 'أنا';
       } else {
         this.incomingMessages.unshift(newSentMessage);
       }
@@ -4840,7 +4838,7 @@ export class WhatsAppManager {
     }
 
     if (targetQuotedId) {
-      const found = this.incomingMessages.find((m) => m.id === targetQuotedId);
+      const found = this.findMessageById(targetQuotedId);
 
       const isFromMeQuote = Boolean(
         found?.isFromMe ||
