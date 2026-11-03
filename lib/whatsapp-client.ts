@@ -285,6 +285,7 @@ export class WhatsAppManager {
   private avatarsMap: Record<string, string> = {};
   private messageIndex = new Map<string, ChatMessage>();
   private groupMetadataCache = new Map<string, { data: any; cachedAt: number }>();
+  private userDevicesCache: any = null;
   private lidMappingsLoaded = false;
   private presenceKeepAliveTimer: NodeJS.Timeout | null = null;
   private pendingReactionsMap: Map<string, any[]> = new Map();
@@ -2224,48 +2225,45 @@ export class WhatsAppManager {
     });
     void this.persistOutgoingQueue();
 
-    // إذا كانت الجلسة متصلة وWebSocket جاهز، أرسل الرسالة مباشرة دون أي تأخير
+    // إذا كانت الجلسة متصلة وWebSocket جاهز، أرسل الرسالة فوراً في الخلفية دون أي حجز لطلب الـ HTTP
     if (this.sock && this.connectionStatus === 'CONNECTED' && this.sock.ws?.isOpen !== false && targetChat) {
-      try {
-        const sendPromise = this.forwardMessage(
-          targetChat,
-          queuedMessage.text || '',
-          queuedMessage.mediaUrl,
-          queuedMessage.quotedMessage?.id,
-          queuedMessage.quotedMessage,
-          requestId,
-          Array.isArray((queuedMessage as any).mentions)
-            ? (queuedMessage as any).mentions.filter((j: unknown) => typeof j === 'string')
-            : undefined
-        );
+      const sendPromise = this.forwardMessage(
+        targetChat,
+        queuedMessage.text || '',
+        queuedMessage.mediaUrl,
+        queuedMessage.quotedMessage?.id,
+        queuedMessage.quotedMessage,
+        requestId,
+        Array.isArray((queuedMessage as any).mentions)
+          ? (queuedMessage as any).mentions.filter((j: unknown) => typeof j === 'string')
+          : undefined
+      );
 
-        const res = await withTimeout(sendPromise, 7000, 'مهلة الإرسال المباشر انتهت');
-        if (res.success && res.messageId) {
-          const sentMessage = this.findMessageById(res.messageId) || this.findMessageById(requestId);
-          if (sentMessage) {
-            const queueEntry = this.outgoingQueue.get(requestId);
-            if (queueEntry) {
-              this.outgoingQueue.set(requestId, {
-                ...queueEntry,
-                status: 'sent',
-                message: sentMessage,
-                updatedAt: Date.now(),
-              });
-              void this.persistOutgoingQueue();
+      void sendPromise
+        .then((res) => {
+          if (res.success && res.messageId) {
+            const sentMessage = this.findMessageById(res.messageId) || this.findMessageById(requestId);
+            if (sentMessage) {
+              const queueEntry = this.outgoingQueue.get(requestId);
+              if (queueEntry) {
+                this.outgoingQueue.set(requestId, {
+                  ...queueEntry,
+                  status: 'sent',
+                  message: sentMessage,
+                  updatedAt: Date.now(),
+                });
+                void this.persistOutgoingQueue();
+              }
+              sentMessage.deliveryStatus = 'sent';
+              this.emitOutgoingMessage(sentMessage);
+              console.log(`[WhatsApp] تم تأكيد إرسال الرسالة من خادم واتساب بنجاح خلال ${Date.now() - enqueueStartedAt}ms (المعرف: ${res.messageId})`);
             }
-            console.log(`[WhatsApp] تم إرسال الرسالة فورياً بنجاح خلال ${Date.now() - enqueueStartedAt}ms (المعرف: ${res.messageId})`);
-            return {
-              success: true,
-              queued: false,
-              sentMessage,
-              message: 'تم إرسال الرسالة بنجاح عبر واتساب.',
-            };
           }
-        }
-      } catch (sendErr) {
-        console.warn('[WhatsApp] تعذر الإرسال المباشر الفوري، تم إبقاء الرسالة في طابور الإرسال:', sendErr);
-        this.schedulePendingQueueFlush();
-      }
+        })
+        .catch((sendErr) => {
+          console.warn('[WhatsApp] تعذر الإرسال المباشر الفوري، تم إبقاء الرسالة في طابور الإرسال:', sendErr);
+          this.schedulePendingQueueFlush();
+        });
     } else {
       if (this.connectionStatus === 'CONNECTED') this.schedulePendingQueueFlush();
     }
@@ -2275,7 +2273,7 @@ export class WhatsAppManager {
       success: true,
       queued: !isWaConnected,
       sentMessage: queuedMessage,
-      message: isWaConnected ? 'تم إرسال الرسالة عبر واتساب.' : 'تم حفظ الرسالة وبدأ إرسالها مباشرة.',
+      message: isWaConnected ? 'تم إرسال الرسالة فورياً عبر واتساب.' : 'تم حفظ الرسالة وبدأ إرسالها مباشرة.',
     };
   }
 
@@ -2511,6 +2509,18 @@ export class WhatsAppManager {
       const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
       this.appStateKeys = state.keys;
 
+      if (!this.userDevicesCache) {
+        try {
+          const NodeCache = (await import('@cacheable/node-cache')).default;
+          this.userDevicesCache = new NodeCache({
+            stdTTL: 86400, // 24 hours
+            useClones: false,
+          });
+        } catch {
+          // fallback gracefully
+        }
+      }
+
       this.sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
@@ -2530,6 +2540,7 @@ export class WhatsAppManager {
         generateHighQualityLinkPreview: false,
         shouldSyncHistoryMessage: () => true,
         cachedGroupMetadata: (jid: string) => this.getGroupMetadataCached(jid),
+        userDevicesCache: this.userDevicesCache || undefined,
         getMessage: async (key) => {
           const found = this.findMessageById(key.id || '');
           if (found?.rawBaileysMessage?.message) {
@@ -4458,6 +4469,7 @@ export class WhatsAppManager {
       const fastSendOptions = {
         ...sendOptions,
         useCachedGroupMetadata: true,
+        useUserDevicesCache: true,
       };
       // إرسال مباشر عبر Baileys بالمعرف القياسي لواتساب لضمان قبول الخادم وتسليم الرسالة فوراً
       const sendTimeoutMs = mediaBase64 ? 90_000 : 30_000;
@@ -5122,6 +5134,7 @@ export class WhatsAppManager {
       const fastSendOptions = {
         ...sendOptions,
         useCachedGroupMetadata: true,
+        useUserDevicesCache: true,
       };
 
       // 5. إرسال الرسالة عبر بروتوكول Baileys حسب نوع الوسائط

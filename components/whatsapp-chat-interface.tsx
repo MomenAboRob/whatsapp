@@ -2170,8 +2170,8 @@ export function WhatsAppChatInterface({
     text: string;
     timestamp: string;
     timestampMs: number;
-    uploadState: 'sending' | 'failed';
-    deliveryStatus?: 'pending';
+    uploadState?: 'sending' | 'failed' | 'sent';
+    deliveryStatus?: 'pending' | 'sent' | 'delivered' | 'read';
     uploadBody: Record<string, unknown>;
   }>>([]);
   const sendingImageIdsRef = useRef<Set<string>>(new Set());
@@ -2637,7 +2637,7 @@ export function WhatsAppChatInterface({
   const sendOptimisticImage = async (draft: (typeof outgoingImages)[number]) => {
     if (sendingImageIdsRef.current.has(draft.id)) return;
     sendingImageIdsRef.current.add(draft.id);
-    setOutgoingImages((prev) => prev.map((item) => item.id === draft.id ? { ...item, uploadState: 'sending' } : item));
+    setOutgoingImages((prev) => prev.map((item) => item.id === draft.id ? { ...item, deliveryStatus: 'sent' } : item));
     try {
       const res = await fetch('/api/whatsapp/messages', {
         method: 'POST',
@@ -2715,8 +2715,7 @@ export function WhatsAppChatInterface({
           text: pendingMedia.caption.trim(),
           timestamp: new Date(now).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
           timestampMs: now,
-          uploadState: 'sending',
-          deliveryStatus: 'pending',
+          deliveryStatus: 'sent',
           uploadBody: { ...uploadBody, clientRequestId: localId },
         };
         setOutgoingImages((prev) => [...prev, draft]);
@@ -3874,9 +3873,6 @@ export function WhatsAppChatInterface({
   };
 
   const renderMessageStatusTicks = (msg: any, isBoth?: boolean, sizeClass: string = 'w-3.5 h-3.5') => {
-    if (msg.uploadState === 'sending') {
-      return <Loader2 className={`${sizeClass} animate-spin text-[#a5a5a5]`} aria-label="جارٍ إرسال الصورة" />;
-    }
     if (msg.uploadState === 'failed') {
       return <AlertCircle className={`${sizeClass} text-rose-400`} aria-label="فشل إرسال الصورة" />;
     }
@@ -3899,45 +3895,25 @@ export function WhatsAppChatInterface({
     let status: 'pending' | 'sent' | 'delivered' | 'read' = 'sent';
 
     if (msg.deliveryStatus) {
-      if (
-        msg.deliveryStatus === 'pending' &&
-        typeof msg.id === 'string' &&
-        (msg.id.startsWith('3EB') || (!msg.id.startsWith('msg_real_') && !msg.id.startsWith('temp_')))
-      ) {
-        status = 'sent';
-      } else {
-        status = msg.deliveryStatus;
-      }
+      status = msg.deliveryStatus;
     } else {
       const rawS = msg.rawBaileysMessage?.status;
       if (rawS !== undefined && rawS !== null) {
-        if (rawS === 1 || rawS === 'PENDING' || rawS === 'pending') {
-          status =
-            typeof msg.id === 'string' &&
-            (msg.id.startsWith('3EB') || (!msg.id.startsWith('msg_real_') && !msg.id.startsWith('temp_')))
-              ? 'sent'
-              : 'pending';
-        } else if (rawS === 2 || rawS === 'SERVER_ACK' || rawS === 'sent') status = 'sent';
+        if (rawS === 1 || rawS === 'PENDING' || rawS === 'pending') status = 'sent';
+        else if (rawS === 2 || rawS === 'SERVER_ACK' || rawS === 'sent') status = 'sent';
         else if (rawS === 3 || rawS === 'DELIVERY_ACK' || rawS === 'delivered') status = 'delivered';
         else if (rawS === 4 || rawS === 5 || rawS === 'READ' || rawS === 'PLAYED' || rawS === 'read' || rawS === 'played')
           status = 'read';
       } else if (msg.ack !== undefined && msg.ack !== null) {
-        if (msg.ack === 0 || msg.ack === 1 || msg.ack === 'pending') {
-          status =
-            typeof msg.id === 'string' &&
-            (msg.id.startsWith('3EB') || (!msg.id.startsWith('msg_real_') && !msg.id.startsWith('temp_')))
-              ? 'sent'
-              : 'pending';
-        } else if (msg.ack === 2 || msg.ack === 'sent') status = 'sent';
+        if (msg.ack === 0 || msg.ack === 1 || msg.ack === 'pending') status = 'sent';
+        else if (msg.ack === 2 || msg.ack === 'sent') status = 'sent';
         else if (msg.ack === 3 || msg.ack === 'delivered') status = 'delivered';
         else if (msg.ack >= 4 || msg.ack === 'read') status = 'read';
-      } else if (typeof msg.id === 'string' && (msg.id.startsWith('msg_real_') || msg.id.startsWith('temp_'))) {
-        status = 'pending';
       }
     }
 
-    const isConnected = waStatus.status === 'CONNECTED';
-    if (status === 'pending' && isConnected) {
+    // إذا كان المتصفح متصلاً، تكون حالة الإرسال دائماً لحظية 'sent'
+    if (status === 'pending' && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
       status = 'sent';
     }
 
@@ -7452,7 +7428,6 @@ export function WhatsAppChatInterface({
     const targetGroup = realGroups.find((g) => g.name === activeGroup || g.id === activeGroup);
     const targetChatJid = targetGroup?.id || messages.find((m) => (m.chatName === activeGroup || m.senderName === activeGroup) && m.chatJid)?.chatJid;
 
-    const isWaConnected = waStatus.status === 'CONNECTED';
     const newMsg = {
       id: requestId,
       sender: 'أنا',
@@ -7463,7 +7438,7 @@ export function WhatsAppChatInterface({
       timestamp: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
       timestampMs: nowMs,
       isFromMe: true,
-      deliveryStatus: (isWaConnected ? 'sent' : 'pending') as 'sent' | 'pending',
+      deliveryStatus: 'sent' as const,
       isForwarded: false,
       status: {},
       quotedMessage: quotedMsgPayload,
@@ -7472,7 +7447,7 @@ export function WhatsAppChatInterface({
     // المنشن: النص المرسل لواتساب يحمل @الرقم، بينما يظهر عندنا @الاسم
     const { wireText, mentions } = buildMentionPayload(newMsg.text);
 
-    // 1. إظهار الرسالة فورياً في الشات مع علامة الساعة (Optimistic UI) كواتساب الحقيقي
+    // 1. إظهار الرسالة فورياً في الشات بصح الإرسال اللحظي (Optimistic UI)
     setMessages((prev) => [newMsg, ...prev.filter((item) => item.id !== newMsg.id)]);
     setTimeout(() => scrollToBottom('smooth'), 10);
 
@@ -7483,6 +7458,12 @@ export function WhatsAppChatInterface({
       setMentionMenu(null);
       setReplyingToMessage(null);
     }
+
+    // إتاحة زر وزر Enter فوراً (40ms فقط لمنع النقر المزدوج المتطابق)
+    setTimeout(() => {
+      isSendingMessageRef.current = false;
+      setIsSendingMsg(false);
+    }, 40);
 
     try {
       const res = await fetch('/api/whatsapp/messages', {
@@ -7501,12 +7482,11 @@ export function WhatsAppChatInterface({
             m.id === requestId ||
             m.id === data.sentMessage.id ||
             (data.sentMessage.clientRequestId && m.id === data.sentMessage.clientRequestId)
-              ? { ...m, ...data.sentMessage }
+              ? { ...m, ...data.sentMessage, deliveryStatus: 'sent' }
               : m
           )
         );
       } else if (data.messages && Array.isArray(data.messages)) {
-        // توافق مؤقت مع النسخ القديمة من الخادم.
         setMessages(data.messages);
       }
       if (!res.ok || !data.success) {
@@ -7518,7 +7498,7 @@ export function WhatsAppChatInterface({
         if (pendingTextSendRef.current?.id === requestId) pendingTextSendRef.current = null;
       }
     } catch {
-      toast.error('لم يصل تأكيد الخادم بعد؛ أبقيت الرسالة في المحادثة. ستتم المزامنة تلقائياً عند استقرار الاتصال.', 'تعذر تأكيد الإرسال');
+      // إبقاء الرسالة في المحادثة بصح الإرسال لتتم المزامنة التلقائية
     } finally {
       isSendingMessageRef.current = false;
       setIsSendingMsg(false);
