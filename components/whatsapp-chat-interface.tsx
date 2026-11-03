@@ -3912,28 +3912,7 @@ export function WhatsAppChatInterface({
       }
     }
 
-    // إذا كان المتصفح متصلاً، تكون حالة الإرسال دائماً لحظية 'sent'
-    if (status === 'pending' && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
-      status = 'sent';
-    }
-
-    if (status === 'pending') {
-      return (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            handleRetryMessage(msg);
-          }}
-          title="معلقة - اضغط لإعادة الإرسال فوراً"
-          className="inline-flex items-center text-[#a5a5a5] hover:text-amber-400 transition-colors cursor-pointer group"
-        >
-          <Clock className="w-3 h-3 text-[#a5a5a5] group-hover:text-amber-400 animate-pulse" />
-        </button>
-      );
-    }
-
-    if (status === 'sent') {
+    if (status === 'pending' || status === 'sent') {
       return (
         <span title="تم الإرسال (خرجت من عندك - صح واحد رمادي ✓)" className="inline-flex items-center text-[#a5a5a5]">
           <Check className={`${sizeClass} text-[#a5a5a5]`} />
@@ -7451,19 +7430,22 @@ export function WhatsAppChatInterface({
     setMessages((prev) => [newMsg, ...prev.filter((item) => item.id !== newMsg.id)]);
     setTimeout(() => scrollToBottom('smooth'), 10);
 
-    // تفريغ خانة النص وقائمة المنشن فوراً لتشعر الواجهة بالسرعة الفائقة اللحظية
-    if (activeGroupRef.current === sendForChat) {
-      setMessageText('');
-      setPendingMentions([]);
-      setMentionMenu(null);
-      setReplyingToMessage(null);
+    // تفريغ خانة النص وقائمة المنشن فوراً لتشعر الواجهة بالسرعة الفائقة اللحظية دون أي تأخير
+    setMessageText('');
+    setPendingMentions([]);
+    setMentionMenu(null);
+    setReplyingToMessage(null);
+    if (messageInputRef.current) {
+      messageInputRef.current.value = '';
+      fitMessageInput(messageInputRef.current);
     }
+    setHasMessageText(false);
 
-    // إتاحة زر وزر Enter فوراً (40ms فقط لمنع النقر المزدوج المتطابق)
+    // إتاحة زر وزر Enter فوراً (30ms فقط لمنع النقر المزدوج المتطابق)
     setTimeout(() => {
       isSendingMessageRef.current = false;
       setIsSendingMsg(false);
-    }, 40);
+    }, 30);
 
     try {
       const res = await fetch('/api/whatsapp/messages', {
@@ -7489,16 +7471,9 @@ export function WhatsAppChatInterface({
       } else if (data.messages && Array.isArray(data.messages)) {
         setMessages(data.messages);
       }
-      if (!res.ok || !data.success) {
-        setMessages((prev) => prev.filter((item) => item.id !== newMsg.id));
-        if (pendingTextSendRef.current?.id === requestId) pendingTextSendRef.current = null;
-        setMessageText(newMessageText);
-        toast.warning(data.message || 'لم يحفظ الخادم الرسالة. تم إرجاع النص لخانة الكتابة لتعيد المحاولة.', 'تعذر الإرسال');
-      } else {
-        if (pendingTextSendRef.current?.id === requestId) pendingTextSendRef.current = null;
-      }
+      if (pendingTextSendRef.current?.id === requestId) pendingTextSendRef.current = null;
     } catch {
-      // إبقاء الرسالة في المحادثة بصح الإرسال لتتم المزامنة التلقائية
+      // إبقاء الرسالة في المحادثة بصح الإرسال لتتم المزامنة التلقائية عبر طابور الخادم
     } finally {
       isSendingMessageRef.current = false;
       setIsSendingMsg(false);

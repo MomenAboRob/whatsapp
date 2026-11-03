@@ -2258,6 +2258,9 @@ export class WhatsAppManager {
               this.emitOutgoingMessage(sentMessage);
               console.log(`[WhatsApp] تم تأكيد إرسال الرسالة من خادم واتساب بنجاح خلال ${Date.now() - enqueueStartedAt}ms (المعرف: ${res.messageId})`);
             }
+          } else {
+            console.warn('[WhatsApp] فشل الإرسال المباشر للرسالة، سيتم إبقاؤها في طابور الإرسال:', res?.message);
+            this.schedulePendingQueueFlush();
           }
         })
         .catch((sendErr) => {
@@ -4051,44 +4054,171 @@ export class WhatsAppManager {
    */
   public resolveTargetJidForSending(target: string): { sendJid: string; groupName: string; chatJid: string } {
     this.loadLidMappings();
-    let sendJid = target;
-    let groupName = target;
-    let chatJid = target;
+    const rawTarget = String(target || '').trim();
+    let sendJid = rawTarget;
+    let groupName = rawTarget;
+    let chatJid = rawTarget;
 
-    // 1. فحص المجموعات والمحادثات المخزنة
+    if (!rawTarget) {
+      return { sendJid: '', groupName: '', chatJid: '' };
+    }
+
+    // 1. تنظيف معرّفات الأجهزة الإضافية إن وجدت (مثل :1@s.whatsapp.net أو :2@lid)
+    const cleanTarget = rawTarget.replace(/:\d+@(?=(?:s\.whatsapp\.net|g\.us|lid)$)/, '@');
+
+    // 2. إذا كان المعرّف بالفعل قروب رسمي (@g.us)
+    if (cleanTarget.endsWith('@g.us')) {
+      const foundGroup = this.userGroups.find((g) => g.id === cleanTarget);
+      return {
+        sendJid: cleanTarget,
+        groupName: foundGroup?.name || rawTarget,
+        chatJid: cleanTarget,
+      };
+    }
+
+    // 3. إذا كان المعرّف بالفعل رقم مستخدم نظامي (@s.whatsapp.net)
+    if (cleanTarget.endsWith('@s.whatsapp.net')) {
+      const found = this.userGroups.find((g) => g.id === cleanTarget || (g.phone && cleanTarget.startsWith(g.phone.replace(/\D/g, ''))));
+      const knownName = found?.name || this.contactsMap[cleanTarget] || this.savedContactsMap[cleanTarget] || rawTarget;
+      return {
+        sendJid: cleanTarget,
+        groupName: knownName,
+        chatJid: cleanTarget,
+      };
+    }
+
+    // 4. إذا كان المعرّف LID (@lid)
+    if (cleanTarget.endsWith('@lid')) {
+      const lid = cleanTarget.split('@')[0].replace(/\D/g, '');
+      const mappedPhone = this.lidToPhoneMap[lid];
+      if (mappedPhone) {
+        const phoneJid = `${mappedPhone}@s.whatsapp.net`;
+        const found = this.userGroups.find((g) => g.id === cleanTarget || g.id === phoneJid);
+        return {
+          sendJid: phoneJid,
+          groupName: found?.name || this.contactsMap[phoneJid] || this.contactsMap[cleanTarget] || rawTarget,
+          chatJid: cleanTarget,
+        };
+      }
+      // البحث في المجموعات عن هذا الـ LID
+      const found = this.userGroups.find((g) => g.id === cleanTarget || g.id.includes(lid));
+      if (found?.phone) {
+        const digits = found.phone.replace(/\D/g, '');
+        if (digits.length >= 8) {
+          return {
+            sendJid: `${digits}@s.whatsapp.net`,
+            groupName: found.name || rawTarget,
+            chatJid: cleanTarget,
+          };
+        }
+      }
+      // البحث في الرسائل السابقة عن هذا الـ LID للحصول على رقم الهاتف أو المعرف الحقيقي
+      const msgMatch = this.incomingMessages.find(
+        (m) =>
+          (m.chatJid === cleanTarget || m.senderJid === cleanTarget) &&
+          m.chatJid &&
+          m.chatJid.endsWith('@s.whatsapp.net')
+      );
+      if (msgMatch?.chatJid) {
+        return {
+          sendJid: msgMatch.chatJid,
+          groupName: msgMatch.chatName || rawTarget,
+          chatJid: cleanTarget,
+        };
+      }
+    }
+
+    // 5. إذا كان الهدف اسماً (مؤمن، أبو إبراهيم، إلخ) أو رقماً دون @
+    // أ) البحث في userGroups
     const foundGroup = this.userGroups.find(
       (g) =>
-        g.id === target ||
-        g.name === target ||
-        (g.phone && g.phone.replace(/\D/g, '') === target.replace(/\D/g, ''))
+        g.id === cleanTarget ||
+        g.name === cleanTarget ||
+        g.name?.trim().toLowerCase() === cleanTarget.toLowerCase() ||
+        (g.phone && g.phone.replace(/\D/g, '') === cleanTarget.replace(/\D/g, ''))
     );
     if (foundGroup) {
-      groupName = foundGroup.name || target;
+      groupName = foundGroup.name || rawTarget;
       chatJid = foundGroup.id;
-      sendJid = foundGroup.id;
-      if (!foundGroup.id.endsWith('@g.us') && foundGroup.phone) {
-        const p = foundGroup.phone.replace(/\D/g, '');
-        if (p) {
-          sendJid = `${p}@s.whatsapp.net`;
+      if (foundGroup.id.endsWith('@g.us')) {
+        return { sendJid: foundGroup.id, groupName, chatJid };
+      }
+      if (foundGroup.phone) {
+        let p = foundGroup.phone.replace(/\D/g, '');
+        if (p.startsWith('05') && p.length === 10) p = '970' + p.slice(1);
+        if (p.startsWith('07') && p.length === 10) p = '962' + p.slice(1);
+        if (p.length >= 8) {
+          return { sendJid: `${p}@s.whatsapp.net`, groupName, chatJid };
+        }
+      }
+      const canonical = this.getCanonicalChatJid(foundGroup.id).replace(/:\d+@/, '@');
+      if (canonical.endsWith('@s.whatsapp.net') || canonical.endsWith('@g.us')) {
+        return { sendJid: canonical, groupName, chatJid };
+      }
+    }
+
+    // ب) البحث في سجل الرسائل (incomingMessages) للعثور على المحادثة المستهدفة بالاسم
+    const msgMatch = this.incomingMessages.find((m) => {
+      const cName = m.chatName?.trim().toLowerCase();
+      const sName = m.senderName?.trim().toLowerCase();
+      const s = m.sender?.trim().toLowerCase();
+      const targetLower = cleanTarget.toLowerCase();
+      return cName === targetLower || sName === targetLower || s === targetLower;
+    });
+
+    if (msgMatch) {
+      if (msgMatch.chatJid) {
+        const canonical = this.getCanonicalChatJid(msgMatch.chatJid).replace(/:\d+@/, '@');
+        if (canonical.endsWith('@g.us') || canonical.endsWith('@s.whatsapp.net')) {
+          return {
+            sendJid: canonical,
+            groupName: msgMatch.chatName || msgMatch.senderName || groupName,
+            chatJid: msgMatch.chatJid,
+          };
+        }
+      }
+      if (msgMatch.senderJid && !msgMatch.senderJid.endsWith('@g.us')) {
+        const canonical = this.getCanonicalChatJid(msgMatch.senderJid).replace(/:\d+@/, '@');
+        if (canonical.endsWith('@s.whatsapp.net')) {
+          return {
+            sendJid: canonical,
+            groupName: msgMatch.senderName || groupName,
+            chatJid: canonical,
+          };
         }
       }
     }
 
-    // 2. إذا كان ينتهي بـ @lid
-    if (sendJid.includes('@lid')) {
-      const lid = sendJid.split('@')[0].replace(/\D/g, '');
-      const mappedPhone = this.lidToPhoneMap[lid];
-      if (mappedPhone) {
-        sendJid = `${mappedPhone}@s.whatsapp.net`;
+    // ج) البحث في contactsMap و savedContactsMap
+    for (const [jid, cName] of Object.entries(this.contactsMap)) {
+      if (cName && (cName === cleanTarget || cName.trim().toLowerCase() === cleanTarget.toLowerCase())) {
+        const canonical = this.getCanonicalChatJid(jid).replace(/:\d+@/, '@');
+        if (canonical.endsWith('@s.whatsapp.net') || canonical.endsWith('@g.us')) {
+          return { sendJid: canonical, groupName: cName, chatJid: canonical };
+        }
+      }
+    }
+    for (const [jid, cName] of Object.entries(this.savedContactsMap)) {
+      if (cName && (cName === cleanTarget || cName.trim().toLowerCase() === cleanTarget.toLowerCase())) {
+        const canonical = this.getCanonicalChatJid(jid).replace(/:\d+@/, '@');
+        if (canonical.endsWith('@s.whatsapp.net') || canonical.endsWith('@g.us')) {
+          return { sendJid: canonical, groupName: cName, chatJid: canonical };
+        }
       }
     }
 
-    // 3. إذا لم يكن يحتوي على @
-    if (!sendJid.includes('@')) {
-      const digits = sendJid.replace(/\D/g, '');
-      if (digits.length >= 8) {
-        sendJid = `${digits}@s.whatsapp.net`;
-      }
+    // د) استخراج الأرقام من النص وتنسيقها
+    let digits = cleanTarget.replace(/\D/g, '');
+    if (digits.startsWith('05') && digits.length === 10) {
+      digits = '970' + digits.slice(1);
+    } else if (digits.startsWith('07') && digits.length === 10) {
+      digits = '962' + digits.slice(1);
+    }
+
+    if (digits.length >= 8) {
+      sendJid = `${digits}@s.whatsapp.net`;
+      chatJid = sendJid;
+      return { sendJid, groupName, chatJid };
     }
 
     return { sendJid, groupName, chatJid };
@@ -4455,6 +4585,14 @@ export class WhatsAppManager {
       // 1. تحديد المعرّف الفعلي للمحادثة المستهدفة وترجمته بدقة لـ Baileys JID
       const { sendJid, groupName, chatJid } = this.resolveTargetJidForSending(targetGroupNameOrJid);
       const targetJid = sendJid;
+
+      if (!targetJid || !targetJid.includes('@')) {
+        console.error(`[WhatsApp] تعذر إرسال الرسالة لعدم وجود معرّف صالح: "${targetGroupNameOrJid}"`);
+        return {
+          success: false,
+          message: `تعذر تحديد معرّف أو رقم واتساب صالح لـ (${targetGroupNameOrJid}). يرجى التحقق من الرقم أو فتح المحادثة مجدداً.`,
+        };
+      }
 
       console.log(`[WhatsApp] جاري إرسال رسالة إلى ${targetJid} (${groupName})...`);
 
